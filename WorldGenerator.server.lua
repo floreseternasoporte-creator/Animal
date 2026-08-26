@@ -87,6 +87,62 @@ local function makeNeonStrip(parent, name, size, position, color)
     return strip
 end
 
+local function createStation(name, position, accent, title, subtitle, promptName, actionText)
+    local base = makePart(worldFolder, name .. "Base", Vector3.new(13, 1.2, 9), position, Color3.fromRGB(22, 39, 52), Enum.Material.Metal, 0, true)
+    base.CanQuery = false
+
+    local console = makePart(worldFolder, name, Vector3.new(8, 8, 1.2), position + Vector3.new(0, 4.6, 2.9), Color3.fromRGB(10, 24, 37), Enum.Material.Metal, 0, true)
+    console.CanQuery = false
+    makeNeonStrip(worldFolder, name .. "Accent", Vector3.new(6.8, 0.16, 0.16), console.Position + Vector3.new(0, 2.8, -0.72), accent)
+
+    local panel = Instance.new("SurfaceGui")
+    panel.Name = name .. "Panel"
+    panel.Adornee = console
+    panel.Face = Enum.NormalId.Front
+    panel.CanvasSize = Vector2.new(600, 380)
+    panel.LightInfluence = 0
+    panel.Brightness = 1.4
+    panel.AlwaysOnTop = false
+    panel.Parent = console
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Name = "Title"
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Position = UDim2.new(0, 25, 0, 55)
+    titleLabel.Size = UDim2.new(1, -50, 0, 75)
+    titleLabel.Font = Enum.Font.GothamBlack
+    titleLabel.Text = title
+    titleLabel.TextColor3 = accent
+    titleLabel.TextScaled = true
+    titleLabel.Parent = panel
+
+    local subLabel = Instance.new("TextLabel")
+    subLabel.Name = "Subtitle"
+    subLabel.BackgroundTransparency = 1
+    subLabel.Position = UDim2.new(0, 30, 0, 150)
+    subLabel.Size = UDim2.new(1, -60, 0, 84)
+    subLabel.Font = Enum.Font.GothamBold
+    subLabel.Text = subtitle
+    subLabel.TextColor3 = Color3.fromRGB(220, 234, 245)
+    subLabel.TextWrapped = true
+    subLabel.TextScaled = true
+    subLabel.Parent = panel
+
+    if promptName then
+        local prompt = Instance.new("ProximityPrompt")
+        prompt.Name = promptName
+        prompt.ActionText = actionText
+        prompt.ObjectText = title
+        prompt.HoldDuration = 0.35
+        prompt.MaxActivationDistance = 12
+        prompt.RequiresLineOfSight = false
+        prompt.KeyboardKeyCode = Enum.KeyCode.E
+        prompt.Parent = console
+    end
+
+    return console, panel
+end
+
 local function getLayerForDepth(depth)
     for _, layer in ipairs(LAYERS) do
         if depth >= layer.MinDepth and depth <= layer.MaxDepth then
@@ -138,6 +194,13 @@ local function generateSurface()
     local spawnPad = makePart(worldFolder, "SpawnPad", Vector3.new(26, 1, 22), Vector3.new(-OUTER_WIDTH / 2 + 9, START_Y + 1, OUTER_WIDTH / 2 - 7), Color3.fromRGB(25, 48, 65), Enum.Material.Metal)
     spawnPad.CanQuery = false
 
+    -- Estaciones físicas: el jugador encuentra las mejoras y contratos en el campamento, no en un menú invasivo.
+    local stationZ = OUTER_WIDTH / 2 - 7
+    createStation("ForgeStation", Vector3.new(-12, START_Y + 1, stationZ), Color3.fromRGB(255, 174, 67), "FORJA DE PROFUNDIDAD", "MEJORA LA POTENCIA BASE DEL PICO", "ForgePrompt", "FORJAR MEJORA")
+    createStation("ScannerStation", Vector3.new(10, START_Y + 1, stationZ), Color3.fromRGB(77, 225, 255), "ESCÁNER GEOLOGICO", "ACTIVA UNA VENTANA DE HALLAZGOS MEJORADOS", "ScannerPrompt", "ACTIVAR ESCÁNER")
+    createStation("ContractStation", Vector3.new(32, START_Y + 1, stationZ), Color3.fromRGB(95, 232, 190), "CONTRATOS DE MINERÍA", "ROMPE BLOQUES, DESCIENDE Y DESCUBRE MINERALES RAROS", "ContractPrompt", "RECLAMAR CONTRATO")
+    local eventBeacon, eventPanel = createStation("EventBeacon", Vector3.new(48, START_Y + 1, stationZ), Color3.fromRGB(196, 142, 255), "BALIZA DE EVENTOS", "SIN EVENTO ACTIVO // LA MINA ESTÁ ESTABLE", nil, nil)
+
     -- Faros del campamento.
     for _, x in ipairs({ -OUTER_WIDTH / 2 + 3, -OUTER_WIDTH / 2 + 15 }) do
         local pole = makePart(worldFolder, "CampLightPole", Vector3.new(0.7, 9, 0.7), Vector3.new(x, START_Y + 6.5, OUTER_WIDTH / 2 - 3), Color3.fromRGB(50, 67, 82), Enum.Material.Metal)
@@ -175,6 +238,33 @@ local function createBlock(x, y, z, depth)
     return block
 end
 
+local function createDepthLandmark(depth, title, accent)
+    local markerY = START_Y - (depth * BLOCK_SIZE) + 1
+    local marker = makePart(worldFolder, "ZoneMarker_" .. depth, Vector3.new(30, 4.5, 0.7), Vector3.new(0, markerY, -(MINE_WIDTH / 2 + 4)), Color3.fromRGB(12, 27, 42), Enum.Material.Metal, 0, true)
+    marker.CanQuery = false
+    makeNeonStrip(worldFolder, "ZoneMarkerLight_" .. depth, Vector3.new(26, 0.16, 0.14), marker.Position + Vector3.new(0, 1.6, 0.48), accent)
+
+    local panel = Instance.new("SurfaceGui")
+    panel.Name = "ZonePanel"
+    panel.Adornee = marker
+    panel.Face = Enum.NormalId.Back
+    panel.CanvasSize = Vector2.new(720, 180)
+    panel.LightInfluence = 0
+    panel.Brightness = 1.25
+    panel.Parent = marker
+
+    local text = Instance.new("TextLabel")
+    text.BackgroundTransparency = 1
+    text.Size = UDim2.new(1, 0, 1, 0)
+    text.Font = Enum.Font.GothamBlack
+    text.Text = title
+    text.TextColor3 = accent
+    text.TextStrokeColor3 = Color3.fromRGB(5, 13, 24)
+    text.TextStrokeTransparency = 0.15
+    text.TextScaled = true
+    text.Parent = panel
+end
+
 local function generateMine()
     generateSurface()
 
@@ -191,6 +281,12 @@ local function generateMine()
             task.wait()
         end
     end
+
+    createDepthLandmark(8, "CAPA DE GRANITO // TÚNELES ANTIGUOS", Color3.fromRGB(177, 167, 160))
+    createDepthLandmark(31, "VETA DE COBRE // GALERÍA INDUSTRIAL", Color3.fromRGB(244, 140, 91))
+    createDepthLandmark(55, "BÓVEDA DORADA // ZONA DE RIESGO", Color3.fromRGB(255, 206, 78))
+    createDepthLandmark(79, "CAVERNAS PRISMÁTICAS // GEMAS", Color3.fromRGB(100, 232, 255))
+    createDepthLandmark(102, "FRACTURA DE OBSIDIANA // ABISMO", Color3.fromRGB(201, 141, 255))
 
     -- Piso real de seguridad: si se rompe todo, el jugador nunca cae al vacío.
     local floor = makePart(boundariesFolder, "MineFloor", Vector3.new(OUTER_WIDTH + 40, 4, OUTER_WIDTH + 40), Vector3.new(0, FLOOR_Y, 0), Color3.fromRGB(19, 26, 38), Enum.Material.Basalt)

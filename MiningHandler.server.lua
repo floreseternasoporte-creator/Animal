@@ -23,6 +23,9 @@ local CONFIG = {
     BuildCooldown = 0.25,
     AutoSaveSeconds = 120,
     LeaderboardLimit = 6,
+    ForgeMaxLevel = 5,
+    ScannerDuration = 120,
+    ScannerRareMultiplier = 1.5,
     BlockSize = Workspace:GetAttribute("MineBlockSize") or 6,
     StartY = Workspace:GetAttribute("MineStartY") or 64,
     GridSize = Workspace:GetAttribute("MineGridSize") or 18,
@@ -78,6 +81,12 @@ local PICKAXE_LEVELS = {
 }
 
 local playerData = {}
+local globalEvent = {
+    Name = "MINA ESTABLE",
+    Active = false,
+    EndsAt = 0,
+    Multiplier = 1,
+}
 
 local function getPickaxeLevel(points)
     points = tonumber(points) or 0
@@ -100,6 +109,15 @@ local function getNextPickaxeLevel(points)
         end
     end
     return nil
+end
+
+local function getForgeCost(forgeLevel)
+    return 250 * ((forgeLevel or 0) + 1) ^ 2
+end
+
+local function getMiningPower(data)
+    local pickaxe = getPickaxeLevel(data and data.Points or 0)
+    return pickaxe.Power + math.clamp(tonumber(data and data.ForgeLevel) or 0, 0, CONFIG.ForgeMaxLevel)
 end
 
 local function getPlayTime(data)
@@ -161,6 +179,12 @@ local function makeEntry(player)
         BlocksMined = data.BlocksMined,
         PlayTime = getPlayTime(data),
         BestDepthTime = data.BestDepthTime or 0,
+        ForgeLevel = data.ForgeLevel or 0,
+        ContractsCompleted = data.ContractsCompleted or 0,
+        Contract = data.Contract,
+        ScannerRemaining = math.max(0, math.floor((data.ScannerUntil or 0) - time())),
+        EventName = globalEvent.Name,
+        EventActive = globalEvent.Active,
     }
 end
 
@@ -230,7 +254,10 @@ local function sendStatsUpdate(player)
         PlayTime = getPlayTime(data),
         BestDepthTime = data.BestDepthTime or 0,
         PickaxeName = currentLevel.Name,
-        PickaxePower = currentLevel.Power,
+        PickaxePower = getMiningPower(data),
+        ForgeLevel = data.ForgeLevel or 0,
+        ForgeCost = (data.ForgeLevel or 0) < CONFIG.ForgeMaxLevel and getForgeCost(data.ForgeLevel) or nil,
+        ContractsCompleted = data.ContractsCompleted or 0,
         CurrentLevelPoints = currentLevel.MinPoints,
         NextLevelPoints = nextLevel and nextLevel.MinPoints or nil,
         NextLevelName = nextLevel and nextLevel.Name or nil,
@@ -246,6 +273,10 @@ local function newPlayerData()
         BlocksMined = 0,
         PlayTime = 0,
         BestDepthTime = 0,
+        ForgeLevel = 0,
+        ContractsCompleted = 0,
+        Contract = nil,
+        ScannerUntil = 0,
         LastHitTime = 0,
         LastBuildTime = 0,
         SessionStartedAt = time(),
@@ -264,6 +295,8 @@ local function loadPlayerData(player)
         data.BlocksMined = tonumber(savedData.BlocksMined) or 0
         data.PlayTime = tonumber(savedData.PlayTime) or 0
         data.BestDepthTime = tonumber(savedData.BestDepthTime) or 0
+        data.ForgeLevel = tonumber(savedData.ForgeLevel) or 0
+        data.ContractsCompleted = tonumber(savedData.ContractsCompleted) or 0
     elseif not success then
         warn("[MiningHandler] No se pudieron cargar los datos de", player.Name)
     end
@@ -284,6 +317,8 @@ local function savePlayerData(player)
         BlocksMined = data.BlocksMined,
         PlayTime = getPlayTime(data),
         BestDepthTime = data.BestDepthTime,
+        ForgeLevel = data.ForgeLevel,
+        ContractsCompleted = data.ContractsCompleted,
     }
 
     local success, err = pcall(function()
@@ -293,6 +328,110 @@ local function savePlayerData(player)
         warn("[MiningHandler] Error guardando datos de", player.Name, ":", err)
     end
 end
+
+-- ======= ESTACIONES FÍSICAS Y EVENTOS =======
+local function updateStationSubtitle(stationName, text)
+    local world = Workspace:FindFirstChild("MineWorld")
+    local station = world and world:FindFirstChild(stationName)
+    local panel = station and station:FindFirstChild(stationName .. "Panel")
+    local subtitle = panel and panel:FindFirstChild("Subtitle")
+    if subtitle and subtitle:IsA("TextLabel") then
+        subtitle.Text = text
+    end
+end
+
+local function refreshWorldStations()
+    if globalEvent.Active then
+        local seconds = math.max(0, math.ceil(globalEvent.EndsAt - time()))
+        updateStationSubtitle("EventBeacon", ("EVENTO ACTIVO: %s // %ds"):format(globalEvent.Name, seconds))
+    else
+        updateStationSubtitle("EventBeacon", "SIN EVENTO ACTIVO // LA MINA ESTÁ ESTABLE")
+    end
+end
+
+local function updateContract(player)
+    local data = playerData[player]
+    local contract = data and data.Contract
+    if not contract then return end
+
+    local progress = math.max(0, data.BlocksMined - (contract.StartBlocks or data.BlocksMined))
+    if progress < (contract.Goal or math.huge) then
+        return
+    end
+
+    data.Points = data.Points + (contract.Reward or 0)
+    data.ContractsCompleted = (data.ContractsCompleted or 0) + 1
+    data.Contract = nil
+    notifyEvent:FireClient(player, ("CONTRATO COMPLETADO  //  +%d PUNTOS"):format(contract.Reward or 0))
+    sendStatsUpdate(player)
+end
+
+local function setupPhysicalStations()
+    local world = Workspace:WaitForChild("MineWorld")
+    local forge = world:WaitForChild("ForgeStation")
+    local scanner = world:WaitForChild("ScannerStation")
+    local contracts = world:WaitForChild("ContractStation")
+
+    local forgePrompt = forge:WaitForChild("ForgePrompt")
+    forgePrompt.Triggered:Connect(function(player)
+        local data = playerData[player]
+        if not data then return end
+        local level = math.clamp(tonumber(data.ForgeLevel) or 0, 0, CONFIG.ForgeMaxLevel)
+        if level >= CONFIG.ForgeMaxLevel then
+            notifyEvent:FireClient(player, "FORJA AL MÁXIMO  //  POTENCIA TOTAL")
+            return
+        end
+        local cost = getForgeCost(level)
+        if data.Points < cost then
+            notifyEvent:FireClient(player, ("FORJA REQUIERE %d PUNTOS"):format(cost))
+            return
+        end
+        data.Points = data.Points - cost
+        data.ForgeLevel = level + 1
+        notifyEvent:FireClient(player, ("FORJA MEJORADA  //  POTENCIA +%d"):format(data.ForgeLevel))
+        sendStatsUpdate(player)
+        broadcastLeaderboards()
+    end)
+
+    local scannerPrompt = scanner:WaitForChild("ScannerPrompt")
+    scannerPrompt.Triggered:Connect(function(player)
+        local data = playerData[player]
+        if not data then return end
+        local remaining = math.max(0, math.ceil((data.ScannerUntil or 0) - time()))
+        if remaining > 0 then
+            notifyEvent:FireClient(player, ("ESCÁNER ACTIVO  //  %ds RESTANTES"):format(remaining))
+            return
+        end
+        data.ScannerUntil = time() + CONFIG.ScannerDuration
+        notifyEvent:FireClient(player, ("ESCÁNER ACTIVADO  //  BONUS RARO x%.1f"):format(CONFIG.ScannerRareMultiplier))
+        sendStatsUpdate(player)
+    end)
+
+    local contractPrompt = contracts:WaitForChild("ContractPrompt")
+    contractPrompt.Triggered:Connect(function(player)
+        local data = playerData[player]
+        if not data then return end
+        if data.Contract then
+            local progress = math.max(0, data.BlocksMined - (data.Contract.StartBlocks or data.BlocksMined))
+            notifyEvent:FireClient(player, ("CONTRATO: %d/%d BLOQUES"):format(progress, data.Contract.Goal or 0))
+            return
+        end
+        local completed = data.ContractsCompleted or 0
+        local goal = 24 + completed * 10
+        local reward = 180 + completed * 120
+        data.Contract = {
+            StartBlocks = data.BlocksMined,
+            Goal = goal,
+            Reward = reward,
+        }
+        notifyEvent:FireClient(player, ("NUEVO CONTRATO  //  ROMPE %d BLOQUES"):format(goal))
+        sendStatsUpdate(player)
+    end)
+
+    refreshWorldStations()
+end
+
+task.spawn(setupPhysicalStations)
 
 -- ======= VALIDACIONES COMUNES =======
 local function isMineBlock(block)
@@ -343,7 +482,7 @@ local function onMineBlockRequest(player, block)
 
     local hitsLeft = tonumber(block:GetAttribute("HitsLeft")) or 1
     local maxHits = tonumber(block:GetAttribute("MaxHits")) or hitsLeft
-    local power = getPickaxeLevel(data.Points).Power
+    local power = getMiningPower(data)
     hitsLeft = hitsLeft - power
     block:SetAttribute("HitsLeft", math.max(hitsLeft, 0))
 
@@ -356,10 +495,16 @@ local function onMineBlockRequest(player, block)
     local depth = tonumber(block:GetAttribute("Depth")) or 0
     local layerName = tostring(block:GetAttribute("LayerName") or "Bloque")
     local rarity = tostring(block:GetAttribute("Rarity") or "COMÚN")
+    local multiplier = globalEvent.Active and globalEvent.Multiplier or 1
+    if rarity ~= "COMÚN" and (data.ScannerUntil or 0) > time() then
+        multiplier = multiplier * CONFIG.ScannerRareMultiplier
+    end
+    points = math.max(1, math.floor(points * multiplier))
     local previousLevel = getPickaxeLevel(data.Points)
 
     data.Points = data.Points + points
     data.BlocksMined = data.BlocksMined + 1
+    updateContract(player)
     if depth > data.MaxDepth then
         data.MaxDepth = depth
         local runTime = getPlayTime(data)
@@ -496,6 +641,37 @@ task.spawn(function()
                     broadcastLeaderboards()
                 end
             end
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(75)
+        globalEvent = {
+            Name = "VETA ESTELAR",
+            Active = true,
+            EndsAt = time() + 75,
+            Multiplier = 2,
+        }
+        refreshWorldStations()
+        for _, player in ipairs(Players:GetPlayers()) do
+            notifyEvent:FireClient(player, "EVENTO ACTIVO  //  VETA ESTELAR x2")
+            sendStatsUpdate(player)
+        end
+        broadcastLeaderboards()
+
+        task.wait(75)
+        globalEvent = {
+            Name = "MINA ESTABLE",
+            Active = false,
+            EndsAt = 0,
+            Multiplier = 1,
+        }
+        refreshWorldStations()
+        for _, player in ipairs(Players:GetPlayers()) do
+            notifyEvent:FireClient(player, "EVENTO FINALIZADO  //  MINA ESTABLE")
+            sendStatsUpdate(player)
         end
     end
 end)

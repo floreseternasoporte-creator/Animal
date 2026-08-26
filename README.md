@@ -69,3 +69,18 @@ Los picos adicionales son **Pico de Zafiro, Pico de Cristal, Pico de Magma, Pico
 [5] [Shale Burst Smashing Rock With A Big Stone 1 — Creator Store](https://create.roblox.com/store/asset/9125931990/Shale-Burst-Smashing-Rock-With-A-Big-Stone-1-SFX)
 
 [6] [Shale Burst Rock Shards — Creator Store](https://create.roblox.com/store/asset/9125929705/Shale-Burst-Rock-Shards-Thrown-Onto-A-Big-St-SFX)
+
+## Expansión: campamento, zonas y objetivos
+
+La mina deja de ser una cuadrícula de bloques sin propósito. En la superficie se genera un **campamento minero físico** con cuatro estaciones interactivas que se usan con el prompt de proximidad estándar de Roblox. Ninguna de ellas activa carteles sobre la pantalla del jugador.
+
+| Estación física | Uso | Resultado |
+|---|---|---|
+| Forja de Profundidad | Interactúa con `E` y paga puntos. | Sube hasta cinco niveles de forja; cada nivel añade potencia permanente al pico. |
+| Escáner Geológico | Interactúa con `E`. | Activa 120 segundos de recompensa aumentada al romper minerales no comunes o superiores. |
+| Contratos de Minería | Interactúa con `E`. | Entrega un objetivo de bloques; al completarlo concede puntos y escala el siguiente contrato. |
+| Baliza de Eventos | Monitor físico, sin menú. | Anuncia la **Veta Estelar**, un evento de 75 segundos que duplica los puntos extraídos. |
+
+El pozo también recibe cinco **hitos físicos de profundidad**: Túneles Antiguos, Galería Industrial, Bóveda Dorada, Cavernas Prismáticas y Fractura de Obsidiana. Funcionan como referencias espaciales reales dentro de la mina y separan visualmente el descenso en zonas.
+
+> Para usar esta expansión, reemplaza `WorldGenerator.server.lua`, `MiningHandler.server.lua` y `MiningAudio.client.lua` por las versiones actuales. Las estaciones se generan automáticamente cuando inicia el mundo.

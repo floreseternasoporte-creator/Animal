@@ -164,8 +164,10 @@ end)
 
 notifyEvent.OnClientEvent:Connect(function(text)
     local message = tostring(text)
-    if message:find("NUEVO PICO") or message:find("NUEVO RÉCORD") then
+    if message:find("NUEVO PICO") or message:find("NUEVO RÉCORD") or message:find("CONTRATO COMPLETADO") then
         play2D("Achievement", AUDIO.LevelUp, 0.86, message:find("PICO") and 1.0 or 1.16)
+    elseif message:find("FORJA MEJORADA") or message:find("EVENTO ACTIVO") or message:find("ESCÁNER ACTIVADO") then
+        play2D("UpgradeOrEvent", AUDIO.LevelUp, 0.68, 0.88)
     elseif message:find("COLOCADO") then
         play2D("BuildConfirm", AUDIO.RockFragments, 0.28, 1.28)
     end
