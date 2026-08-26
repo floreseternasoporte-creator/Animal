@@ -466,6 +466,11 @@ placeBlockEvent.OnServerEvent:Connect(onPlaceBlockRequest)
 -- ======= EVENTOS DE JUGADORES Y ACTUALIZACIÓN VIVA =======
 Players.PlayerAdded:Connect(function(player)
     loadPlayerData(player)
+    task.delay(3, function()
+        if player.Parent then
+            broadcastLeaderboards()
+        end
+    end)
     player.CharacterAdded:Connect(function()
         task.wait(0.6)
         sendStatsUpdate(player)

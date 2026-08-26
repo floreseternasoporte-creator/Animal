@@ -203,6 +203,26 @@ local function generateMine()
     makePart(boundariesFolder, "BoundaryEast", Vector3.new(wallThickness, WALL_HEIGHT, OUTER_WIDTH + 40), Vector3.new(OUTER_WIDTH / 2 + 18, WALL_CENTER_Y, 0), Color3.fromRGB(255, 255, 255), Enum.Material.ForceField, 1, true)
     makePart(boundariesFolder, "BoundaryWest", Vector3.new(wallThickness, WALL_HEIGHT, OUTER_WIDTH + 40), Vector3.new(-OUTER_WIDTH / 2 - 18, WALL_CENTER_Y, 0), Color3.fromRGB(255, 255, 255), Enum.Material.ForceField, 1, true)
 
+    -- Monitor físico de clasificación: está en el mundo, no en el HUD del jugador.
+    -- Se coloca al sur de la entrada y mira hacia el interior de la mina.
+    local boardPosition = Vector3.new(0, START_Y + 13, -(OUTER_WIDTH / 2 + 10))
+    local display = makePart(Workspace, "LeaderboardDisplay", Vector3.new(46, 23, 1), boardPosition, Color3.fromRGB(8, 19, 32), Enum.Material.Metal, 0, true)
+    display.CanQuery = false
+    display:SetAttribute("DisplayType", "MiningLeaderboard")
+
+    local displayFrame = makePart(worldFolder, "LeaderboardFrame", Vector3.new(49, 26, 1.6), boardPosition - Vector3.new(0, 0, 0.25), Color3.fromRGB(29, 60, 82), Enum.Material.Metal, 0, true)
+    displayFrame.CanQuery = false
+    local displayFace = makePart(worldFolder, "LeaderboardFace", Vector3.new(44, 21, 0.25), boardPosition - Vector3.new(0, 0, 1.1), Color3.fromRGB(6, 15, 27), Enum.Material.SmoothPlastic, 0, false)
+    displayFace.CanQuery = false
+    makeNeonStrip(worldFolder, "LeaderboardTopLight", Vector3.new(41, 0.18, 0.18), boardPosition + Vector3.new(0, 10.7, 1.1), Color3.fromRGB(78, 224, 255))
+
+    for _, xOffset in ipairs({ -17, 17 }) do
+        local post = makePart(worldFolder, "LeaderboardPost", Vector3.new(1.4, 14, 1.4), boardPosition + Vector3.new(xOffset, -17, 0), Color3.fromRGB(28, 48, 63), Enum.Material.Metal, 0, true)
+        post.CanQuery = false
+        local foot = makePart(worldFolder, "LeaderboardFoot", Vector3.new(7, 1.2, 6), post.Position - Vector3.new(0, 7.5, 0), Color3.fromRGB(22, 39, 52), Enum.Material.Metal, 0, true)
+        foot.CanQuery = false
+    end
+
     Workspace:SetAttribute("MineGridSize", GRID_SIZE)
     Workspace:SetAttribute("MineBlockSize", BLOCK_SIZE)
     Workspace:SetAttribute("MineTotalDepth", TOTAL_DEPTH)

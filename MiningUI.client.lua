@@ -366,6 +366,7 @@ local boardColumns = {}
 local boardRows = {}
 local boardBoardReady = false
 local boardServerStatus
+local latestLeaderboardPayload
 
 local function boardLabel(parent, name, text, position, size, font, textSize, color)
     local item = Instance.new("TextLabel")
@@ -508,7 +509,10 @@ end
 
 statsUpdateEvent.OnClientEvent:Connect(updateStats)
 notifyEvent.OnClientEvent:Connect(showNotification)
-leaderboardUpdateEvent.OnClientEvent:Connect(updateBoard)
+leaderboardUpdateEvent.OnClientEvent:Connect(function(payload)
+    latestLeaderboardPayload = payload
+    updateBoard(payload)
+end)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode.B then
@@ -517,6 +521,12 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
--- El tablero 3D se desactiva para mantener la vista limpia y permitir excavar sin obstrucciones.
+-- El tablero es físico dentro del mundo; el HUD normal sigue oculto para mantener la pantalla limpia.
+task.spawn(function()
+    setupBoard()
+    if latestLeaderboardPayload then
+        updateBoard(latestLeaderboardPayload)
+    end
+end)
 setBuildMode(false)
 print("[MiningUI] HUD tecnológico, perfil, progreso y monitor 3D listos.")
