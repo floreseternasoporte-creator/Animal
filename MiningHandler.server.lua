@@ -2,11 +2,8 @@
     MiningHandler.server.lua
     UBICACIÓN: ServerScriptService
 
-    Cerebro seguro de la mina:
-    - Valida cada golpe y cada bloque en el servidor.
-    - Guarda puntos, profundidad, bloques rotos, tiempo jugado y récord de velocidad.
-    - Publica rankings vivos del servidor para el monitor 3D.
-    - Permite construir bloques de vuelta en modo construcción.
+    Núcleo servidor de Crónicas de Lumenfall.
+    Mantiene el nombre de archivo para facilitar el reemplazo en Studio.
 ]=]
 
 local Players = game:GetService("Players")
@@ -14,124 +11,105 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local DataStoreService = game:GetService("DataStoreService")
 
-local mineDataStore = DataStoreService:GetDataStore("MiningGame_PlayerData_v2")
-local blocksFolder = Workspace:WaitForChild("MineBlocks")
+Workspace:WaitForChild("LumenfallWorld")
+while not Workspace:GetAttribute("LumenfallReady") do
+    task.wait(0.1)
+end
+
+local world = Workspace:WaitForChild("LumenfallWorld")
+local terrainFolder = world:WaitForChild("LumenTerrain")
+local harvestFolder = world:WaitForChild("LumenHarvestables")
+local buildFolder = world:WaitForChild("LumenPlayerBuilds")
+local structuresFolder = world:WaitForChild("LumenStructures")
+
+local BLOCK_SIZE = Workspace:GetAttribute("LumenBlockSize") or 4
+local MAP_RADIUS = Workspace:GetAttribute("LumenMapRadius") or 20
+local dataStore = DataStoreService:GetDataStore("Lumenfall_PlayerData_v1")
+
+local oldMiningRemotes = ReplicatedStorage:FindFirstChild("MiningRemotes")
+if oldMiningRemotes then oldMiningRemotes:Destroy() end
+
+local remotes = ReplicatedStorage:FindFirstChild("LumenRemotes")
+if not remotes then
+    remotes = Instance.new("Folder")
+    remotes.Name = "LumenRemotes"
+    remotes.Parent = ReplicatedStorage
+end
+
+local function remote(name)
+    local item = remotes:FindFirstChild(name)
+    if not item then
+        item = Instance.new("RemoteEvent")
+        item.Name = name
+        item.Parent = remotes
+    end
+    return item
+end
+
+local gatherRequest = remote("GatherRequest")
+local placeRequest = remote("PlaceRequest")
+local statsUpdate = remote("StatsUpdate")
+local notify = remote("Notify")
+local harvestFX = remote("HarvestFX")
+local boardUpdate = remote("BoardUpdate")
 
 local CONFIG = {
-    MaxMineDistance = 18,
-    HitCooldown = 0.13,
-    BuildCooldown = 0.25,
-    AutoSaveSeconds = 120,
-    LeaderboardLimit = 6,
-    ForgeMaxLevel = 5,
-    ScannerDuration = 120,
-    ScannerRareMultiplier = 1.5,
-    BlockSize = Workspace:GetAttribute("MineBlockSize") or 6,
-    StartY = Workspace:GetAttribute("MineStartY") or 64,
-    GridSize = Workspace:GetAttribute("MineGridSize") or 18,
-    TotalDepth = Workspace:GetAttribute("MineTotalDepth") or 110,
+    GatherDistance = 16,
+    GatherCooldown = 0.22,
+    PlaceCooldown = 0.18,
+    MaxEnergy = 100,
+    EnergyDrainInterval = 12,
+    BeaconCost = 6,
+    AutoSaveInterval = 120,
 }
 
-local MINE_WIDTH = CONFIG.GridSize * CONFIG.BlockSize
-local HALF_GRID = math.floor(CONFIG.GridSize / 2)
-local MIN_GRID_COORD = -HALF_GRID * CONFIG.BlockSize
-local MAX_GRID_COORD = (HALF_GRID - 1) * CONFIG.BlockSize
-
--- ======= REMOTES =======
-local remotesFolder = ReplicatedStorage:FindFirstChild("MiningRemotes")
-if not remotesFolder then
-    remotesFolder = Instance.new("Folder")
-    remotesFolder.Name = "MiningRemotes"
-    remotesFolder.Parent = ReplicatedStorage
-end
-
-local function getOrCreateRemote(name, className)
-    local remote = remotesFolder:FindFirstChild(name)
-    if not remote then
-        remote = Instance.new(className or "RemoteEvent")
-        remote.Name = name
-        remote.Parent = remotesFolder
-    end
-    return remote
-end
-
-local mineBlockEvent = getOrCreateRemote("MineBlockRequest")
-local blockHitEvent = getOrCreateRemote("BlockHit")
-local blockBrokenEvent = getOrCreateRemote("BlockBroken")
-local specialDiscoveryEvent = getOrCreateRemote("SpecialDiscovery")
-local statsUpdateEvent = getOrCreateRemote("StatsUpdate")
-local notifyEvent = getOrCreateRemote("Notify")
-local leaderboardUpdateEvent = getOrCreateRemote("LeaderboardUpdate")
-local placeBlockEvent = getOrCreateRemote("PlaceBlockRequest")
-local blockPlacedEvent = getOrCreateRemote("BlockPlaced")
-
--- ======= PROGRESIÓN DEL PICO =======
-local PICKAXE_LEVELS = {
-    { Name = "Pico de Madera",    MinPoints = 0,    Power = 1 },
-    { Name = "Pico de Piedra",    MinPoints = 50,   Power = 2 },
-    { Name = "Pico de Hierro",    MinPoints = 150,  Power = 3 },
-    { Name = "Pico de Oro",       MinPoints = 400,  Power = 4 },
-    { Name = "Pico de Diamante",  MinPoints = 800,  Power = 6 },
-    { Name = "Pico de Esmeralda", MinPoints = 1500, Power = 8 },
-    { Name = "Pico de Zafiro",    MinPoints = 2800, Power = 10 },
-    { Name = "Pico de Cristal",   MinPoints = 4800, Power = 13 },
-    { Name = "Pico de Magma",     MinPoints = 7600, Power = 17 },
-    { Name = "Pico de Obsidiana", MinPoints = 11000, Power = 22 },
-    { Name = "Pico Estelar",      MinPoints = 16000, Power = 30 },
+local BUILD_TYPES = {
+    Madera = { Cost = "Madera", Color = Color3.fromRGB(116, 79, 51), Material = Enum.Material.Wood },
+    Piedra = { Cost = "Piedra", Color = Color3.fromRGB(118, 128, 142), Material = Enum.Material.Slate },
+    Cristal = { Cost = "Cristal", Color = Color3.fromRGB(106, 229, 255), Material = Enum.Material.Glass },
+    Lumen = { Cost = "Lumen", Color = Color3.fromRGB(213, 149, 255), Material = Enum.Material.Neon },
 }
 
 local playerData = {}
-local globalEvent = {
-    Name = "MINA ESTABLE",
-    Active = false,
-    EndsAt = 0,
-    Multiplier = 1,
-}
 
-local function getPickaxeLevel(points)
-    points = tonumber(points) or 0
-    local current = PICKAXE_LEVELS[1]
-    for _, level in ipairs(PICKAXE_LEVELS) do
-        local minimum = tonumber(level.MinPoints) or 0
-        if points >= minimum then
-            current = level
-        end
+local function newData()
+    return {
+        Resources = { Madera = 8, Piedra = 5, Cristal = 0, Lumen = 0 },
+        Energy = CONFIG.MaxEnergy,
+        Beacons = { Aurora = false, Rift = false, Ash = false },
+        ResourcesGathered = 0,
+        BlocksBuilt = 0,
+        LastGather = 0,
+        LastPlace = 0,
+    }
+end
+
+local function safeResourceTable(resources)
+    resources = type(resources) == "table" and resources or {}
+    return {
+        Madera = math.max(0, tonumber(resources.Madera) or 0),
+        Piedra = math.max(0, tonumber(resources.Piedra) or 0),
+        Cristal = math.max(0, tonumber(resources.Cristal) or 0),
+        Lumen = math.max(0, tonumber(resources.Lumen) or 0),
+    }
+end
+
+local function beaconCount(data)
+    local total = 0
+    for _, restored in pairs(data.Beacons or {}) do
+        if restored then total = total + 1 end
     end
-    return current
+    return total
 end
 
-local function getNextPickaxeLevel(points)
-    points = tonumber(points) or 0
-    for _, level in ipairs(PICKAXE_LEVELS) do
-        local minimum = tonumber(level.MinPoints) or math.huge
-        if points < minimum then
-            return level
-        end
-    end
-    return nil
-end
-
-local function getForgeCost(forgeLevel)
-    return 250 * ((forgeLevel or 0) + 1) ^ 2
-end
-
-local function getMiningPower(data)
-    local pickaxe = getPickaxeLevel(data and data.Points or 0)
-    return pickaxe.Power + math.clamp(tonumber(data and data.ForgeLevel) or 0, 0, CONFIG.ForgeMaxLevel)
-end
-
-local function getPlayTime(data)
-    return math.max(0, (data.PlayTime or 0) + math.floor(time() - (data.SessionStartedAt or time())))
-end
-
-local function getCurrentDepth(player)
+local function getRoot(player)
     local character = player.Character
-    local hrp = character and character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return 0 end
-    return math.clamp(math.max(0, math.floor((CONFIG.StartY - hrp.Position.Y) / CONFIG.BlockSize)), 0, CONFIG.TotalDepth)
+    return character and character:FindFirstChild("HumanoidRootPart")
 end
 
-local function ensureLeaderstats(player)
+local function updateLeaderstats(player)
+    local data = playerData[player]
+    if not data then return end
     local leaderstats = player:FindFirstChild("leaderstats")
     if not leaderstats then
         leaderstats = Instance.new("Folder")
@@ -139,444 +117,204 @@ local function ensureLeaderstats(player)
         leaderstats.Parent = player
     end
 
-    local function value(name, className)
-        local item = leaderstats:FindFirstChild(name)
-        if not item then
-            item = Instance.new(className or "IntValue")
-            item.Name = name
-            item.Parent = leaderstats
+    local function getValue(name)
+        local value = leaderstats:FindFirstChild(name)
+        if not value then
+            value = Instance.new("IntValue")
+            value.Name = name
+            value.Parent = leaderstats
         end
-        return item
+        return value
     end
 
-    return {
-        Points = value("Puntos"),
-        Depth = value("Profundidad"),
-        Blocks = value("Bloques"),
-        Time = value("TiempoMin", "IntValue"),
-    }
+    getValue("Balizas").Value = beaconCount(data)
+    getValue("Recursos").Value = data.ResourcesGathered
+    getValue("Construido").Value = data.BlocksBuilt
 end
 
-local function updateLeaderstats(player, currentDepth)
+local function sendStats(player)
     local data = playerData[player]
     if not data then return end
-    local stats = ensureLeaderstats(player)
-    stats.Points.Value = data.Points
-    stats.Depth.Value = data.MaxDepth
-    stats.Blocks.Value = data.BlocksMined
-    stats.Time.Value = math.floor(getPlayTime(data) / 60)
+    updateLeaderstats(player)
+    statsUpdate:FireClient(player, {
+        Resources = safeResourceTable(data.Resources),
+        Energy = data.Energy,
+        MaxEnergy = CONFIG.MaxEnergy,
+        Beacons = beaconCount(data),
+        BeaconState = data.Beacons,
+        ResourcesGathered = data.ResourcesGathered,
+        BlocksBuilt = data.BlocksBuilt,
+    })
 end
 
-local function makeEntry(player)
+local function playerEntry(player)
     local data = playerData[player]
     if not data then return nil end
     return {
         Name = player.DisplayName,
-        Username = player.Name,
         UserId = player.UserId,
-        Points = data.Points,
-        MaxDepth = data.MaxDepth,
-        BlocksMined = data.BlocksMined,
-        PlayTime = getPlayTime(data),
-        BestDepthTime = data.BestDepthTime or 0,
-        ForgeLevel = data.ForgeLevel or 0,
-        ContractsCompleted = data.ContractsCompleted or 0,
-        Contract = data.Contract,
-        ScannerRemaining = math.max(0, math.floor((data.ScannerUntil or 0) - time())),
-        EventName = globalEvent.Name,
-        EventActive = globalEvent.Active,
+        Beacons = beaconCount(data),
+        Resources = data.ResourcesGathered,
+        Built = data.BlocksBuilt,
     }
 end
 
-local function sortedCopy(entries, comparator)
-    local copy = table.clone(entries)
-    table.sort(copy, comparator)
-    return copy
-end
+local function updatePhysicalBoard()
+    local board = structuresFolder:FindFirstChild("ExplorerBoard")
+    local panel = board and board:FindFirstChild("WorldPanel")
+    local subtitle = panel and panel:FindFirstChild("Subtitle")
+    if not subtitle then return end
 
-local function buildLeaderboardPayload()
     local entries = {}
     for _, player in ipairs(Players:GetPlayers()) do
-        local entry = makeEntry(player)
+        local entry = playerEntry(player)
         if entry then table.insert(entries, entry) end
     end
-
-    local depth = sortedCopy(entries, function(a, b)
-        if a.MaxDepth == b.MaxDepth then return a.Points > b.Points end
-        return a.MaxDepth > b.MaxDepth
-    end)
-    local speed = sortedCopy(entries, function(a, b)
-        local aTime = a.BestDepthTime > 0 and a.BestDepthTime or math.huge
-        local bTime = b.BestDepthTime > 0 and b.BestDepthTime or math.huge
-        if aTime == bTime then return a.MaxDepth > b.MaxDepth end
-        return aTime < bTime
-    end)
-    local points = sortedCopy(entries, function(a, b)
-        if a.Points == b.Points then return a.MaxDepth > b.MaxDepth end
-        return a.Points > b.Points
+    table.sort(entries, function(a, b)
+        if a.Beacons == b.Beacons then return a.Resources > b.Resources end
+        return a.Beacons > b.Beacons
     end)
 
-    local function limit(list)
-        local result = {}
-        for index = 1, math.min(CONFIG.LeaderboardLimit, #list) do
-            result[index] = list[index]
-        end
-        return result
+    local lines = {}
+    for index = 1, math.min(#entries, 5) do
+        local entry = entries[index]
+        table.insert(lines, ("%d. %s  //  %d BALIZAS  //  %d RECURSOS"):format(index, string.upper(entry.Name), entry.Beacons, entry.Resources))
     end
-
-    return {
-        Depth = limit(depth),
-        Speed = limit(speed),
-        Points = limit(points),
-        ServerSize = #entries,
-        UpdatedAt = os.time(),
-    }
+    subtitle.Text = #lines > 0 and table.concat(lines, "\n") or "AÚN NO HAY VIAJEROS REGISTRADOS"
+    boardUpdate:FireAllClients(entries)
 end
 
-local function broadcastLeaderboards()
-    leaderboardUpdateEvent:FireAllClients(buildLeaderboardPayload())
-end
-
-local function sendStatsUpdate(player)
+local function savePlayer(player)
     local data = playerData[player]
     if not data then return end
-
-    local currentLevel = getPickaxeLevel(data.Points)
-    local nextLevel = getNextPickaxeLevel(data.Points)
-    local currentDepth = getCurrentDepth(player)
-    updateLeaderstats(player, currentDepth)
-
-    statsUpdateEvent:FireClient(player, {
-        Points = data.Points,
-        MaxDepth = data.MaxDepth,
-        CurrentDepth = currentDepth,
-        BlocksMined = data.BlocksMined,
-        PlayTime = getPlayTime(data),
-        BestDepthTime = data.BestDepthTime or 0,
-        PickaxeName = currentLevel.Name,
-        PickaxePower = getMiningPower(data),
-        ForgeLevel = data.ForgeLevel or 0,
-        ForgeCost = (data.ForgeLevel or 0) < CONFIG.ForgeMaxLevel and getForgeCost(data.ForgeLevel) or nil,
-        ContractsCompleted = data.ContractsCompleted or 0,
-        CurrentLevelPoints = currentLevel.MinPoints,
-        NextLevelPoints = nextLevel and nextLevel.MinPoints or nil,
-        NextLevelName = nextLevel and nextLevel.Name or nil,
-        MineTotalDepth = CONFIG.TotalDepth,
-    })
-end
-
--- ======= DATOS =======
-local function newPlayerData()
-    return {
-        Points = 0,
-        MaxDepth = 0,
-        BlocksMined = 0,
-        PlayTime = 0,
-        BestDepthTime = 0,
-        ForgeLevel = 0,
-        ContractsCompleted = 0,
-        Contract = nil,
-        ScannerUntil = 0,
-        LastHitTime = 0,
-        LastBuildTime = 0,
-        SessionStartedAt = time(),
-    }
-end
-
-local function loadPlayerData(player)
-    local data = newPlayerData()
-    local success, savedData = pcall(function()
-        return mineDataStore:GetAsync("Player_" .. player.UserId)
-    end)
-
-    if success and type(savedData) == "table" then
-        data.Points = tonumber(savedData.Points) or 0
-        data.MaxDepth = tonumber(savedData.MaxDepth) or 0
-        data.BlocksMined = tonumber(savedData.BlocksMined) or 0
-        data.PlayTime = tonumber(savedData.PlayTime) or 0
-        data.BestDepthTime = tonumber(savedData.BestDepthTime) or 0
-        data.ForgeLevel = tonumber(savedData.ForgeLevel) or 0
-        data.ContractsCompleted = tonumber(savedData.ContractsCompleted) or 0
-    elseif not success then
-        warn("[MiningHandler] No se pudieron cargar los datos de", player.Name)
-    end
-
-    playerData[player] = data
-    ensureLeaderstats(player)
-    sendStatsUpdate(player)
-    broadcastLeaderboards()
-end
-
-local function savePlayerData(player)
-    local data = playerData[player]
-    if not data then return end
-
     local payload = {
-        Points = data.Points,
-        MaxDepth = data.MaxDepth,
-        BlocksMined = data.BlocksMined,
-        PlayTime = getPlayTime(data),
-        BestDepthTime = data.BestDepthTime,
-        ForgeLevel = data.ForgeLevel,
-        ContractsCompleted = data.ContractsCompleted,
+        Resources = safeResourceTable(data.Resources),
+        Energy = data.Energy,
+        Beacons = data.Beacons,
+        ResourcesGathered = data.ResourcesGathered,
+        BlocksBuilt = data.BlocksBuilt,
     }
-
-    local success, err = pcall(function()
-        mineDataStore:UpdateAsync("Player_" .. player.UserId, function()
+    local ok, err = pcall(function()
+        dataStore:UpdateAsync("Lumen_" .. player.UserId, function()
             return payload
         end)
     end)
-    if not success then
-        warn("[MiningHandler] Error guardando datos de", player.Name, ":", err)
-    end
+    if not ok then warn("[Lumenfall] No se pudo guardar", player.Name, err) end
 end
 
--- ======= ESTACIONES FÍSICAS Y EVENTOS =======
-local function updateStationSubtitle(stationName, text)
-    local world = Workspace:FindFirstChild("MineWorld")
-    local station = world and world:FindFirstChild(stationName)
-    local panel = station and station:FindFirstChild(stationName .. "Panel")
-    local subtitle = panel and panel:FindFirstChild("Subtitle")
-    if subtitle and subtitle:IsA("TextLabel") then
-        subtitle.Text = text
-    end
-end
-
-local function refreshWorldStations()
-    if globalEvent.Active then
-        local seconds = math.max(0, math.ceil(globalEvent.EndsAt - time()))
-        updateStationSubtitle("EventBeacon", ("EVENTO ACTIVO: %s // %ds"):format(globalEvent.Name, seconds))
-    else
-        updateStationSubtitle("EventBeacon", "SIN EVENTO ACTIVO // LA MINA ESTÁ ESTABLE")
-    end
-end
-
-local function updateContract(player)
-    local data = playerData[player]
-    local contract = data and data.Contract
-    if not contract then return end
-
-    local progress = math.max(0, data.BlocksMined - (contract.StartBlocks or data.BlocksMined))
-    if progress < (contract.Goal or math.huge) then
-        return
-    end
-
-    data.Points = data.Points + (contract.Reward or 0)
-    data.ContractsCompleted = (data.ContractsCompleted or 0) + 1
-    data.Contract = nil
-    notifyEvent:FireClient(player, ("CONTRATO COMPLETADO  //  +%d PUNTOS"):format(contract.Reward or 0))
-    sendStatsUpdate(player)
-end
-
-local function setupPhysicalStations()
-    local world = Workspace:WaitForChild("MineWorld")
-    local forge = world:WaitForChild("ForgeStation")
-    local scanner = world:WaitForChild("ScannerStation")
-    local contracts = world:WaitForChild("ContractStation")
-
-    local forgePrompt = forge:WaitForChild("ForgePrompt")
-    forgePrompt.Triggered:Connect(function(player)
-        local data = playerData[player]
-        if not data then return end
-        local level = math.clamp(tonumber(data.ForgeLevel) or 0, 0, CONFIG.ForgeMaxLevel)
-        if level >= CONFIG.ForgeMaxLevel then
-            notifyEvent:FireClient(player, "FORJA AL MÁXIMO  //  POTENCIA TOTAL")
-            return
-        end
-        local cost = getForgeCost(level)
-        if data.Points < cost then
-            notifyEvent:FireClient(player, ("FORJA REQUIERE %d PUNTOS"):format(cost))
-            return
-        end
-        data.Points = data.Points - cost
-        data.ForgeLevel = level + 1
-        notifyEvent:FireClient(player, ("FORJA MEJORADA  //  POTENCIA +%d"):format(data.ForgeLevel))
-        sendStatsUpdate(player)
-        broadcastLeaderboards()
+local function loadPlayer(player)
+    local data = newData()
+    local ok, saved = pcall(function()
+        return dataStore:GetAsync("Lumen_" .. player.UserId)
     end)
-
-    local scannerPrompt = scanner:WaitForChild("ScannerPrompt")
-    scannerPrompt.Triggered:Connect(function(player)
-        local data = playerData[player]
-        if not data then return end
-        local remaining = math.max(0, math.ceil((data.ScannerUntil or 0) - time()))
-        if remaining > 0 then
-            notifyEvent:FireClient(player, ("ESCÁNER ACTIVO  //  %ds RESTANTES"):format(remaining))
-            return
-        end
-        data.ScannerUntil = time() + CONFIG.ScannerDuration
-        notifyEvent:FireClient(player, ("ESCÁNER ACTIVADO  //  BONUS RARO x%.1f"):format(CONFIG.ScannerRareMultiplier))
-        sendStatsUpdate(player)
-    end)
-
-    local contractPrompt = contracts:WaitForChild("ContractPrompt")
-    contractPrompt.Triggered:Connect(function(player)
-        local data = playerData[player]
-        if not data then return end
-        if data.Contract then
-            local progress = math.max(0, data.BlocksMined - (data.Contract.StartBlocks or data.BlocksMined))
-            notifyEvent:FireClient(player, ("CONTRATO: %d/%d BLOQUES"):format(progress, data.Contract.Goal or 0))
-            return
-        end
-        local completed = data.ContractsCompleted or 0
-        local goal = 24 + completed * 10
-        local reward = 180 + completed * 120
-        data.Contract = {
-            StartBlocks = data.BlocksMined,
-            Goal = goal,
-            Reward = reward,
-        }
-        notifyEvent:FireClient(player, ("NUEVO CONTRATO  //  ROMPE %d BLOQUES"):format(goal))
-        sendStatsUpdate(player)
-    end)
-
-    refreshWorldStations()
-end
-
-task.spawn(setupPhysicalStations)
-
--- ======= VALIDACIONES COMUNES =======
-local function isMineBlock(block)
-    return block and block:IsA("BasePart") and block.Parent and blocksFolder and block:IsDescendantOf(blocksFolder) and block:GetAttribute("IsMineable") == true
-end
-
-local function getCharacterRoot(player)
-    local character = player.Character
-    local hrp = character and character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil end
-    return hrp
-end
-
-local function withinMineRange(player, position)
-    local hrp = getCharacterRoot(player)
-    return hrp and (hrp.Position - position).Magnitude <= CONFIG.MaxMineDistance
-end
-
-local function recordDepthProgress(player)
-    local data = playerData[player]
-    if not data then return false end
-
-    local currentDepth = getCurrentDepth(player)
-    if currentDepth <= data.MaxDepth then
-        return false
+    if ok and type(saved) == "table" then
+        data.Resources = safeResourceTable(saved.Resources)
+        data.Energy = math.clamp(tonumber(saved.Energy) or CONFIG.MaxEnergy, 1, CONFIG.MaxEnergy)
+        data.Beacons = type(saved.Beacons) == "table" and {
+            Aurora = saved.Beacons.Aurora == true,
+            Rift = saved.Beacons.Rift == true,
+            Ash = saved.Beacons.Ash == true,
+        } or data.Beacons
+        data.ResourcesGathered = math.max(0, tonumber(saved.ResourcesGathered) or 0)
+        data.BlocksBuilt = math.max(0, tonumber(saved.BlocksBuilt) or 0)
     end
-
-    data.MaxDepth = currentDepth
-    local runTime = getPlayTime(data)
-    if data.BestDepthTime == 0 or runTime < data.BestDepthTime then
-        data.BestDepthTime = runTime
-    end
-    return true
+    playerData[player] = data
+    sendStats(player)
+    updatePhysicalBoard()
 end
 
--- ======= REGENERACIÓN DE RECURSOS =======
-local function scheduleResourceRegeneration(block)
-    if not block or block:GetAttribute("IsPlaced") then return end
+local function findHarvestNode(instance)
+    local current = instance
+    while current and current ~= Workspace do
+        if current:IsA("Model") and current:GetAttribute("HarvestNode") then
+            return current
+        end
+        current = current.Parent
+    end
+    return nil
+end
 
-    local template = block:Clone()
+local function nodeCore(node)
+    return node and node:FindFirstChild("HarvestCore", true)
+end
+
+local function scheduleNodeRespawn(node)
+    local template = node:Clone()
     template.Parent = nil
-    template:SetAttribute("IsMineable", true)
-    template:SetAttribute("HitsLeft", template:GetAttribute("MaxHits") or 1)
-
-    local rarity = tostring(template:GetAttribute("Rarity") or "COMÚN")
-    local delayByRarity = {
-        ["COMÚN"] = 90,
-        ["POCO COMÚN"] = 120,
-        ["RARA"] = 150,
-        ["ÉPICA"] = 180,
-        ["MÍTICA"] = 210,
-        ["LEGENDARIA"] = 240,
-        ["ANCIANA"] = 300,
-    }
-    local respawnDelay = delayByRarity[rarity] or 150
-
-    local attemptRestore
-    attemptRestore = function()
-        if not blocksFolder.Parent then return end
-        for _, existing in ipairs(blocksFolder:GetChildren()) do
-            if existing:IsA("BasePart") and (existing.Position - template.Position).Magnitude < 0.5 then
+    local delaySeconds = math.max(25, tonumber(node:GetAttribute("RespawnSeconds")) or 60)
+    local attemptRespawn
+    attemptRespawn = function()
+        if not harvestFolder.Parent then return end
+        local core = nodeCore(template)
+        if not core then return end
+        for _, player in ipairs(Players:GetPlayers()) do
+            local root = getRoot(player)
+            if root and (root.Position - core.Position).Magnitude < BLOCK_SIZE * 2 then
+                task.delay(15, attemptRespawn)
                 return
             end
         end
-        for _, otherPlayer in ipairs(Players:GetPlayers()) do
-            local root = getCharacterRoot(otherPlayer)
-            if root and (root.Position - template.Position).Magnitude < CONFIG.BlockSize then
-                task.delay(15, attemptRestore)
-                return
-            end
-        end
-        template.Parent = blocksFolder
+        if template.Parent == nil then template.Parent = harvestFolder end
     end
-    task.delay(respawnDelay, attemptRestore)
+    task.delay(delaySeconds, attemptRespawn)
 end
 
--- ======= MINERÍA =======
-local function onMineBlockRequest(player, block)
-    if not isMineBlock(block) then return end
+local function scheduleTerrainRespawn(voxel)
+    local template = voxel:Clone()
+    template.Parent = nil
+    local function restore()
+        if not terrainFolder.Parent then return end
+        for _, player in ipairs(Players:GetPlayers()) do
+            local root = getRoot(player)
+            if root and (root.Position - template.Position).Magnitude < BLOCK_SIZE * 1.5 then
+                task.delay(20, restore)
+                return
+            end
+        end
+        if template.Parent == nil then template.Parent = terrainFolder end
+    end
+    task.delay(120, restore)
+end
 
+local function harvest(player, target)
     local data = playerData[player]
-    if not data then return end
-
+    if not data or not target or not target:IsA("BasePart") then return end
+    local root = getRoot(player)
+    if not root or (root.Position - target.Position).Magnitude > CONFIG.GatherDistance then return end
     local now = time()
-    if now - data.LastHitTime < CONFIG.HitCooldown then return end
-    data.LastHitTime = now
+    if now - data.LastGather < CONFIG.GatherCooldown then return end
+    data.LastGather = now
 
-    if not withinMineRange(player, block.Position) then return end
+    local node = findHarvestNode(target)
+    local core = nodeCore(node)
+    if node and core and node.Parent then
+        local health = math.max(0, (tonumber(node:GetAttribute("Health")) or 1) - 1)
+        node:SetAttribute("Health", health)
+        harvestFX:FireClient(player, core.Position, node:GetAttribute("ResourceColor"), health > 0)
+        if health > 0 then return end
 
-    local hitsLeft = tonumber(block:GetAttribute("HitsLeft")) or 1
-    local maxHits = tonumber(block:GetAttribute("MaxHits")) or hitsLeft
-    local power = getMiningPower(data)
-    hitsLeft = hitsLeft - power
-    block:SetAttribute("HitsLeft", math.max(hitsLeft, 0))
-
-    if hitsLeft > 0 then
-        blockHitEvent:FireClient(player, block, hitsLeft, maxHits)
+        local drop = tostring(node:GetAttribute("DropType") or "Piedra")
+        local amount = math.max(1, tonumber(node:GetAttribute("DropAmount")) or 1)
+        data.Resources[drop] = (data.Resources[drop] or 0) + amount
+        data.ResourcesGathered = data.ResourcesGathered + amount
+        notify:FireClient(player, ("RECOLECTASTE %d %s"):format(amount, string.upper(drop)))
+        scheduleNodeRespawn(node)
+        node:Destroy()
+    elseif target:IsDescendantOf(terrainFolder) and target:GetAttribute("Voxel") then
+        data.Resources.Piedra = (data.Resources.Piedra or 0) + 1
+        data.ResourcesGathered = data.ResourcesGathered + 1
+        harvestFX:FireClient(player, target.Position, Color3.fromRGB(177, 167, 150), false)
+        scheduleTerrainRespawn(target)
+        target:Destroy()
+    else
         return
     end
 
-    local points = tonumber(block:GetAttribute("Points")) or 0
-    local depth = tonumber(block:GetAttribute("Depth")) or 0
-    local layerName = tostring(block:GetAttribute("LayerName") or "Bloque")
-    local rarity = tostring(block:GetAttribute("Rarity") or "COMÚN")
-    local multiplier = globalEvent.Active and globalEvent.Multiplier or 1
-    if rarity ~= "COMÚN" and (data.ScannerUntil or 0) > time() then
-        multiplier = multiplier * CONFIG.ScannerRareMultiplier
-    end
-    points = math.max(1, math.floor(points * multiplier))
-    local previousLevel = getPickaxeLevel(data.Points)
-
-    data.Points = data.Points + points
-    data.BlocksMined = data.BlocksMined + 1
-    updateContract(player)
-    if depth > data.MaxDepth then
-        data.MaxDepth = depth
-        local runTime = getPlayTime(data)
-        if data.BestDepthTime == 0 or runTime < data.BestDepthTime then
-            data.BestDepthTime = runTime
-        end
-    end
-
-    local newLevel = getPickaxeLevel(data.Points)
-    blockBrokenEvent:FireClient(player, block, layerName, points, data.Points, data.MaxDepth, rarity)
-    scheduleResourceRegeneration(block)
-    if rarity ~= "COMÚN" or points >= 100 then
-        specialDiscoveryEvent:FireClient(player, layerName, rarity, points, depth)
-    end
-    block:SetAttribute("IsMineable", false)
-    block:Destroy()
-
-    if newLevel.Name ~= previousLevel.Name then
-        notifyEvent:FireClient(player, ("NUEVO PICO DESBLOQUEADO  //  %s"):format(newLevel.Name))
-    end
-
-    sendStatsUpdate(player)
-    broadcastLeaderboards()
+    sendStats(player)
+    updatePhysicalBoard()
 end
 
-mineBlockEvent.OnServerEvent:Connect(onMineBlockRequest)
-
--- ======= CONSTRUCCIÓN =======
-local normalVectors = {
+local NORMALS = {
     [Enum.NormalId.Top] = Vector3.new(0, 1, 0),
     [Enum.NormalId.Bottom] = Vector3.new(0, -1, 0),
     [Enum.NormalId.Front] = Vector3.new(0, 0, -1),
@@ -585,105 +323,169 @@ local normalVectors = {
     [Enum.NormalId.Right] = Vector3.new(1, 0, 0),
 }
 
-local function isPositionInsideMine(position)
-    return position.X >= MIN_GRID_COORD and position.X <= MAX_GRID_COORD
-        and position.Z >= MIN_GRID_COORD and position.Z <= MAX_GRID_COORD
-        and position.Y <= CONFIG.StartY + CONFIG.BlockSize / 2
-        and position.Y >= (Workspace:GetAttribute("MineFloorY") or -700) + CONFIG.BlockSize / 2
+local function isBuildAnchor(target)
+    return target and target:IsA("BasePart") and (target:IsDescendantOf(terrainFolder) or target:IsDescendantOf(buildFolder))
 end
 
-local function hasOccupant(position, ignorePart)
-    local overlapParams = OverlapParams.new()
-    overlapParams.FilterType = Enum.RaycastFilterType.Exclude
-    overlapParams.FilterDescendantsInstances = { ignorePart }
-    local parts = Workspace:GetPartBoundsInBox(CFrame.new(position), Vector3.new(CONFIG.BlockSize - 0.2, CONFIG.BlockSize - 0.2, CONFIG.BlockSize - 0.2), overlapParams)
-    for _, part in ipairs(parts) do
-        if part:IsDescendantOf(blocksFolder) then
-            return true
+local function candidatePosition(target, normalId)
+    local direction = NORMALS[normalId]
+    if not direction then return nil end
+    local raw = target.Position + direction * BLOCK_SIZE
+    return Vector3.new(
+        math.round(raw.X / BLOCK_SIZE) * BLOCK_SIZE,
+        math.round(raw.Y / BLOCK_SIZE) * BLOCK_SIZE,
+        math.round(raw.Z / BLOCK_SIZE) * BLOCK_SIZE
+    )
+end
+
+local function isOpenCell(position)
+    if math.abs(position.X / BLOCK_SIZE) > MAP_RADIUS + 2 or math.abs(position.Z / BLOCK_SIZE) > MAP_RADIUS + 2 then
+        return false
+    end
+    local params = OverlapParams.new()
+    params.FilterType = Enum.RaycastFilterType.Include
+    params.FilterDescendantsInstances = { terrainFolder, buildFolder, harvestFolder, structuresFolder }
+    local parts = Workspace:GetPartBoundsInBox(CFrame.new(position), Vector3.new(BLOCK_SIZE - 0.16, BLOCK_SIZE - 0.16, BLOCK_SIZE - 0.16), params)
+    if #parts > 0 then return false end
+    for _, player in ipairs(Players:GetPlayers()) do
+        local root = getRoot(player)
+        if root and (root.Position - position).Magnitude < BLOCK_SIZE then
+            return false
         end
     end
-    return false
+    return true
 end
 
-local function onPlaceBlockRequest(player, target, normalId)
-    if not isMineBlock(target) then return end
-    local direction = normalVectors[normalId]
-    if not direction then return end
-
+local function placeBlock(player, target, normalId, buildType)
     local data = playerData[player]
-    if not data then return end
+    buildType = tostring(buildType or "Madera")
+    local config = BUILD_TYPES[buildType]
+    if not data or not config or not isBuildAnchor(target) then return end
+
+    local root = getRoot(player)
+    local position = candidatePosition(target, normalId)
+    if not root or not position or (root.Position - position).Magnitude > CONFIG.GatherDistance then return end
+    if not isOpenCell(position) then return end
     local now = time()
-    if now - data.LastBuildTime < CONFIG.BuildCooldown then return end
+    if now - data.LastPlace < CONFIG.PlaceCooldown then return end
+    if (data.Resources[config.Cost] or 0) < 1 then
+        notify:FireClient(player, ("FALTA %s PARA CONSTRUIR"):format(string.upper(config.Cost)))
+        return
+    end
 
-    local targetPosition = target.Position
-    local candidate = targetPosition + direction * CONFIG.BlockSize
-    candidate = Vector3.new(
-        math.round(candidate.X / CONFIG.BlockSize) * CONFIG.BlockSize,
-        math.round(candidate.Y / CONFIG.BlockSize) * CONFIG.BlockSize,
-        math.round(candidate.Z / CONFIG.BlockSize) * CONFIG.BlockSize
-    )
-
-    if not isPositionInsideMine(candidate) then return end
-    if not withinMineRange(player, candidate) then return end
-    if hasOccupant(candidate, target) then return end
-
-    data.LastBuildTime = now
+    data.LastPlace = now
+    data.Resources[config.Cost] = data.Resources[config.Cost] - 1
+    data.BlocksBuilt = data.BlocksBuilt + 1
     local block = Instance.new("Part")
-    block.Name = "Construido"
+    block.Name = "Bloque " .. buildType
     block.Anchored = true
-    block.Size = Vector3.new(CONFIG.BlockSize, CONFIG.BlockSize, CONFIG.BlockSize)
-    block.Position = candidate
-    block.Color = Color3.fromRGB(63, 174, 201)
-    block.Material = Enum.Material.SmoothPlastic
+    block.Size = Vector3.new(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)
+    block.Position = position
+    block.Color = config.Color
+    block.Material = config.Material
     block.TopSurface = Enum.SurfaceType.Smooth
     block.BottomSurface = Enum.SurfaceType.Smooth
-    block:SetAttribute("LayerName", "Construido")
-    block:SetAttribute("MaxHits", 3)
-    block:SetAttribute("HitsLeft", 3)
-    block:SetAttribute("Points", 0)
-    block:SetAttribute("Depth", math.max(1, math.floor((CONFIG.StartY - candidate.Y) / CONFIG.BlockSize)))
-    block:SetAttribute("IsMineable", true)
-    block:SetAttribute("IsPlaced", true)
-    block.Parent = blocksFolder
-
-    blockPlacedEvent:FireAllClients(block, player.DisplayName)
-    notifyEvent:FireClient(player, "BLOQUE COLOCADO  //  MODO CONSTRUCCIÓN")
+    block:SetAttribute("PlayerBuild", true)
+    block:SetAttribute("BuildType", buildType)
+    block.Parent = buildFolder
+    harvestFX:FireAllClients(position, config.Color, false, true)
+    sendStats(player)
+    updatePhysicalBoard()
 end
 
-placeBlockEvent.OnServerEvent:Connect(onPlaceBlockRequest)
+local function requireResources(data, requirements)
+    for resource, amount in pairs(requirements) do
+        if (data.Resources[resource] or 0) < amount then return false end
+    end
+    for resource, amount in pairs(requirements) do
+        data.Resources[resource] = data.Resources[resource] - amount
+    end
+    return true
+end
 
--- ======= EVENTOS DE JUGADORES Y ACTUALIZACIÓN VIVA =======
-Players.PlayerAdded:Connect(function(player)
-    loadPlayerData(player)
-    task.delay(3, function()
-        if player.Parent then
-            broadcastLeaderboards()
+local function activateStations()
+    local workshop = structuresFolder:WaitForChild("LumenWorkshop")
+    local shrine = structuresFolder:WaitForChild("RestShrine")
+    local beaconPrompts = {
+        { Object = structuresFolder:WaitForChild("AuroraBeacon"), Key = "Aurora", Name = "BALIZA DE AURORA" },
+        { Object = structuresFolder:WaitForChild("CrystalBeacon"), Key = "Rift", Name = "BALIZA DE LA GRIETA" },
+        { Object = structuresFolder:WaitForChild("AshBeacon"), Key = "Ash", Name = "BALIZA DE CENIZA" },
+    }
+
+    workshop:WaitForChild("WorkshopPrompt").Triggered:Connect(function(player)
+        local data = playerData[player]
+        if not data then return end
+        if requireResources(data, { Madera = 4, Piedra = 2 }) then
+            data.Resources.Lumen = (data.Resources.Lumen or 0) + 3
+            notify:FireClient(player, "KIT FABRICADO  //  +3 BLOQUES LUMEN")
+            sendStats(player)
+        else
+            notify:FireClient(player, "RECETA: 4 MADERA + 2 PIEDRA")
         end
     end)
+
+    shrine:WaitForChild("RestPrompt").Triggered:Connect(function(player)
+        local data = playerData[player]
+        if not data then return end
+        data.Energy = CONFIG.MaxEnergy
+        notify:FireClient(player, "ENERGÍA RESTAURADA  //  VIAJE GUARDADO")
+        sendStats(player)
+        savePlayer(player)
+    end)
+
+    for _, beacon in ipairs(beaconPrompts) do
+        beacon.Object:WaitForChild(beacon.Key == "Aurora" and "BeaconPrompt" or (beacon.Key == "Rift" and "RiftPrompt" or "AshPrompt")).Triggered:Connect(function(player)
+            local data = playerData[player]
+            if not data then return end
+            if data.Beacons[beacon.Key] then
+                notify:FireClient(player, beacon.Name .. " YA ESTÁ RESTAURADA")
+                return
+            end
+            if requireResources(data, { Cristal = CONFIG.BeaconCost }) then
+                data.Beacons[beacon.Key] = true
+                data.Energy = CONFIG.MaxEnergy
+                notify:FireClient(player, beacon.Name .. " RESTAURADA  //  NUEVA RUTA")
+                sendStats(player)
+                updatePhysicalBoard()
+            else
+                notify:FireClient(player, ("NECESITAS %d CRISTALES LUMEN"):format(CONFIG.BeaconCost))
+            end
+        end)
+    end
+end
+
+gatherRequest.OnServerEvent:Connect(harvest)
+placeRequest.OnServerEvent:Connect(placeBlock)
+
+task.spawn(activateStations)
+
+Players.PlayerAdded:Connect(function(player)
+    loadPlayer(player)
     player.CharacterAdded:Connect(function()
-        task.wait(0.6)
-        sendStatsUpdate(player)
+        task.wait(0.5)
+        sendStats(player)
     end)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-    savePlayerData(player)
+    savePlayer(player)
     playerData[player] = nil
-    broadcastLeaderboards()
+    updatePhysicalBoard()
 end)
 
 task.spawn(function()
     while true do
-        task.wait(3)
+        task.wait(CONFIG.EnergyDrainInterval)
         for _, player in ipairs(Players:GetPlayers()) do
             local data = playerData[player]
             if data then
-                local progressed = recordDepthProgress(player)
-                sendStatsUpdate(player)
-                if progressed then
-                    notifyEvent:FireClient(player, ("NUEVO RÉCORD DE PROFUNDIDAD  //  %dm"):format(data.MaxDepth))
-                    broadcastLeaderboards()
+                data.Energy = math.max(0, data.Energy - 1)
+                if data.Energy == 0 then
+                    local character = player.Character
+                    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                    if humanoid then humanoid:TakeDamage(5) end
                 end
+                sendStats(player)
             end
         end
     end
@@ -691,50 +493,19 @@ end)
 
 task.spawn(function()
     while true do
-        task.wait(75)
-        globalEvent = {
-            Name = "VETA ESTELAR",
-            Active = true,
-            EndsAt = time() + 75,
-            Multiplier = 2,
-        }
-        refreshWorldStations()
+        task.wait(CONFIG.AutoSaveInterval)
         for _, player in ipairs(Players:GetPlayers()) do
-            notifyEvent:FireClient(player, "EVENTO ACTIVO  //  VETA ESTELAR x2")
-            sendStatsUpdate(player)
+            savePlayer(player)
         end
-        broadcastLeaderboards()
-
-        task.wait(75)
-        globalEvent = {
-            Name = "MINA ESTABLE",
-            Active = false,
-            EndsAt = 0,
-            Multiplier = 1,
-        }
-        refreshWorldStations()
-        for _, player in ipairs(Players:GetPlayers()) do
-            notifyEvent:FireClient(player, "EVENTO FINALIZADO  //  MINA ESTABLE")
-            sendStatsUpdate(player)
-        end
-    end
-end)
-
-task.spawn(function()
-    while true do
-        task.wait(CONFIG.AutoSaveSeconds)
-        for _, player in ipairs(Players:GetPlayers()) do
-            savePlayerData(player)
-        end
-        broadcastLeaderboards()
+        updatePhysicalBoard()
     end
 end)
 
 game:BindToClose(function()
     for _, player in ipairs(Players:GetPlayers()) do
-        savePlayerData(player)
+        savePlayer(player)
     end
 end)
 
-broadcastLeaderboards()
-print("[MiningHandler] Sistema seguro de minería, construcción y rankings listo.")
+updatePhysicalBoard()
+print("[Lumenfall] Servidor de supervivencia voxel listo.")

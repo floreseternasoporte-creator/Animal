@@ -2,344 +2,317 @@
     WorldGenerator.server.lua
     UBICACIÓN: ServerScriptService
 
-    Mundo de excavación y construcción:
-    - La superficie es un anillo/campamento: el centro queda abierto y sí se puede excavar.
-    - La mina es profunda y ancha para que los jugadores puedan entrar literalmente.
-    - Un piso, muros invisibles y una zona de retorno evitan que el jugador caiga al vacío.
-    - Se crea un monitor 3D para que el cliente pinte rankings y progreso.
+    Crónicas de Lumenfall: mundo voxel original de exploración y supervivencia.
+    No replica mapas, nombres, recetas ni apariencia de ningún juego existente.
 ]=]
 
 local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
 
--- ======= CONFIGURACIÓN DEL MUNDO =======
-local LAYERS = {
-    { Name = "Tierra",       Color = Color3.fromRGB(126, 82, 52),   Material = Enum.Material.Ground,   Hits = 1,  Points = 1,    Rarity = "COMÚN",     MinDepth = 1,   MaxDepth = 6 },
-    { Name = "Piedra",       Color = Color3.fromRGB(112, 121, 132), Material = Enum.Material.Slate,    Hits = 2,  Points = 3,    Rarity = "COMÚN",     MinDepth = 7,   MaxDepth = 14 },
-    { Name = "Granito",      Color = Color3.fromRGB(155, 137, 132), Material = Enum.Material.Rock,     Hits = 3,  Points = 6,    Rarity = "COMÚN",     MinDepth = 15,  MaxDepth = 22 },
-    { Name = "Carbón",       Color = Color3.fromRGB(35, 42, 52),    Material = Enum.Material.Basalt,   Hits = 3,  Points = 10,   Rarity = "POCO COMÚN", MinDepth = 23,  MaxDepth = 30 },
-    { Name = "Cobre",        Color = Color3.fromRGB(184, 104, 72),  Material = Enum.Material.Metal,    Hits = 4,  Points = 16,   Rarity = "POCO COMÚN", MinDepth = 31,  MaxDepth = 38 },
-    { Name = "Hierro",       Color = Color3.fromRGB(168, 148, 132), Material = Enum.Material.Metal,    Hits = 4,  Points = 23,   Rarity = "POCO COMÚN", MinDepth = 39,  MaxDepth = 46 },
-    { Name = "Plata",        Color = Color3.fromRGB(210, 224, 235), Material = Enum.Material.Metal,    Hits = 5,  Points = 33,   Rarity = "RARA",       MinDepth = 47,  MaxDepth = 54 },
-    { Name = "Oro",          Color = Color3.fromRGB(239, 192, 54),  Material = Enum.Material.Metal,    Hits = 6,  Points = 48,   Rarity = "RARA",       MinDepth = 55,  MaxDepth = 62 },
-    { Name = "Zafiro",       Color = Color3.fromRGB(45, 115, 255),  Material = Enum.Material.Ice,      Hits = 7,  Points = 68,   Rarity = "ÉPICA",      MinDepth = 63,  MaxDepth = 70 },
-    { Name = "Diamante",     Color = Color3.fromRGB(92, 218, 255),  Material = Enum.Material.Ice,      Hits = 8,  Points = 95,   Rarity = "ÉPICA",      MinDepth = 71,  MaxDepth = 78 },
-    { Name = "Esmeralda",    Color = Color3.fromRGB(47, 211, 138),  Material = Enum.Material.Glass,    Hits = 10, Points = 135,  Rarity = "MÍTICA",     MinDepth = 79,  MaxDepth = 86 },
-    { Name = "Cristal Lunar",Color = Color3.fromRGB(196, 142, 255), Material = Enum.Material.Glass,    Hits = 12, Points = 190,  Rarity = "MÍTICA",     MinDepth = 87,  MaxDepth = 94 },
-    { Name = "Magma",        Color = Color3.fromRGB(255, 86, 38),  Material = Enum.Material.Neon,     Hits = 14, Points = 270,  Rarity = "LEGENDARIA", MinDepth = 95,  MaxDepth = 101 },
-    { Name = "Obsidiana",    Color = Color3.fromRGB(30, 23, 48),    Material = Enum.Material.Basalt,   Hits = 16, Points = 390,  Rarity = "LEGENDARIA", MinDepth = 102, MaxDepth = 107 },
-    { Name = "Núcleo Estelar",Color = Color3.fromRGB(255, 235, 132),Material = Enum.Material.Neon,     Hits = 20, Points = 650,  Rarity = "ANCIANA",    MinDepth = 108, MaxDepth = 999 },
+local CONFIG = {
+    Seed = 48152,
+    BlockSize = 4,
+    MapRadius = 20,
+    WorldFloorY = -22,
 }
 
-local GRID_SIZE = 14             -- 14 x 14 bloques por capa: grande, pero estable en Studio
-local BLOCK_SIZE = 6              -- tamaño de cada bloque en studs
-local TOTAL_DEPTH = 110           -- 110 capas; el pozo ya no se siente corto
-local START_Y = 64                -- altura de la primera capa
-local MINE_WIDTH = GRID_SIZE * BLOCK_SIZE
-local OUTER_WIDTH = MINE_WIDTH + 28
-local HALF_GRID = math.floor(GRID_SIZE / 2)
-local FLOOR_Y = START_Y - (TOTAL_DEPTH * BLOCK_SIZE) - (BLOCK_SIZE / 2) - 2
-local WALL_HEIGHT = START_Y - FLOOR_Y + 22
-local WALL_CENTER_Y = (START_Y + FLOOR_Y) / 2
-
--- Limpiar restos si el script se vuelve a ejecutar en Studio.
-for _, name in ipairs({ "MineBlocks", "MineWorld", "MineBoundaries", "LeaderboardDisplay", "Surface", "MainSpawn", "MineFloor" }) do
-    local old = Workspace:FindFirstChild(name)
-    if old then
-        old:Destroy()
+local function clearWorld()
+    for _, name in ipairs({
+        "LumenfallWorld", "LumenTerrain", "LumenHarvestables", "LumenStructures", "LumenPlayerBuilds",
+        "MineBlocks", "MineWorld", "MineBoundaries", "LeaderboardDisplay", "Surface", "MainSpawn", "MineFloor",
+    }) do
+        local old = Workspace:FindFirstChild(name)
+        if old then old:Destroy() end
     end
 end
 
-local worldFolder = Instance.new("Folder")
-worldFolder.Name = "MineWorld"
-worldFolder.Parent = Workspace
+clearWorld()
+Workspace:SetAttribute("LumenfallReady", false)
+Workspace:SetAttribute("LumenBlockSize", CONFIG.BlockSize)
+Workspace:SetAttribute("LumenMapRadius", CONFIG.MapRadius)
+Workspace.FallenPartsDestroyHeight = CONFIG.WorldFloorY - 60
 
-local blocksFolder = Instance.new("Folder")
-blocksFolder.Name = "MineBlocks"
-blocksFolder.Parent = Workspace
+local world = Instance.new("Folder")
+world.Name = "LumenfallWorld"
+world.Parent = Workspace
 
-local boundariesFolder = Instance.new("Folder")
-boundariesFolder.Name = "MineBoundaries"
-boundariesFolder.Parent = Workspace
+local terrainFolder = Instance.new("Folder")
+terrainFolder.Name = "LumenTerrain"
+terrainFolder.Parent = world
 
--- Publicar la configuración antes de crear los bloques evita que otros scripts lean tamaños antiguos.
-Workspace:SetAttribute("MineGridSize", GRID_SIZE)
-Workspace:SetAttribute("MineBlockSize", BLOCK_SIZE)
-Workspace:SetAttribute("MineTotalDepth", TOTAL_DEPTH)
-Workspace:SetAttribute("MineStartY", START_Y)
-Workspace:SetAttribute("MineFloorY", FLOOR_Y)
-Workspace:SetAttribute("MineWorldReady", false)
+local harvestFolder = Instance.new("Folder")
+harvestFolder.Name = "LumenHarvestables"
+harvestFolder.Parent = world
 
-local function makePart(parent, name, size, position, color, material, transparency, canCollide)
-    local part = Instance.new("Part")
-    part.Name = name
-    part.Anchored = true
-    part.Size = size
-    part.Position = position
-    part.Color = color or Color3.fromRGB(255, 255, 255)
-    part.Material = material or Enum.Material.SmoothPlastic
-    local safeTransparency = tonumber(transparency) or 0
-    part.Transparency = safeTransparency
-    part.CanCollide = canCollide ~= false
-    part.CanTouch = canCollide ~= false
-    part.CanQuery = safeTransparency < 1
-    part.TopSurface = Enum.SurfaceType.Smooth
-    part.BottomSurface = Enum.SurfaceType.Smooth
-    part.Parent = parent
-    return part
+local structuresFolder = Instance.new("Folder")
+structuresFolder.Name = "LumenStructures"
+structuresFolder.Parent = world
+
+local buildFolder = Instance.new("Folder")
+buildFolder.Name = "LumenPlayerBuilds"
+buildFolder.Parent = world
+
+local function part(parent, name, size, position, color, material, canCollide, transparency)
+    local instance = Instance.new("Part")
+    instance.Name = name
+    instance.Anchored = true
+    instance.Size = size
+    instance.Position = position
+    instance.Color = color
+    instance.Material = material or Enum.Material.SmoothPlastic
+    instance.CanCollide = canCollide ~= false
+    instance.CanTouch = false
+    instance.CanQuery = true
+    instance.Transparency = tonumber(transparency) or 0
+    instance.TopSurface = Enum.SurfaceType.Smooth
+    instance.BottomSurface = Enum.SurfaceType.Smooth
+    instance.Parent = parent
+    return instance
 end
 
-local function makeNeonStrip(parent, name, size, position, color)
-    local strip = makePart(parent, name, size, position, color, Enum.Material.Neon, 0, false)
-    strip.CanTouch = false
+local function neon(parent, name, size, position, color)
+    local strip = part(parent, name, size, position, color, Enum.Material.Neon, false)
     strip.CanQuery = false
     return strip
 end
 
-local function createStation(name, position, accent, title, subtitle, promptName, actionText)
-    local base = makePart(worldFolder, name .. "Base", Vector3.new(13, 1.2, 9), position, Color3.fromRGB(22, 39, 52), Enum.Material.Metal, 0, true)
-    base.CanQuery = false
+local function heightAt(gridX, gridZ)
+    local broad = math.noise((gridX + CONFIG.Seed) / 15, (gridZ - CONFIG.Seed) / 15) * 2.1
+    local detail = math.noise((gridX + CONFIG.Seed * 2) / 5, (gridZ + CONFIG.Seed) / 5) * 0.8
+    return math.clamp(math.floor(broad + detail), -2, 4)
+end
 
-    local console = makePart(worldFolder, name, Vector3.new(8, 8, 1.2), position + Vector3.new(0, 4.6, 2.9), Color3.fromRGB(10, 24, 37), Enum.Material.Metal, 0, true)
-    console.CanQuery = false
-    makeNeonStrip(worldFolder, name .. "Accent", Vector3.new(6.8, 0.16, 0.16), console.Position + Vector3.new(0, 2.8, -0.72), accent)
+local function biomeAt(gridX, gridZ)
+    if gridZ < -8 then
+        return "Grieta de Cristal", Color3.fromRGB(89, 129, 167), Color3.fromRGB(105, 224, 255)
+    elseif gridX > 7 then
+        return "Llanuras de Ceniza", Color3.fromRGB(114, 101, 92), Color3.fromRGB(255, 138, 74)
+    elseif gridX < -10 then
+        return "Bosque de Aurora", Color3.fromRGB(59, 121, 89), Color3.fromRGB(96, 238, 187)
+    end
+    return "Praderas de Lumen", Color3.fromRGB(91, 157, 96), Color3.fromRGB(95, 214, 255)
+end
 
-    local panel = Instance.new("SurfaceGui")
-    panel.Name = name .. "Panel"
-    panel.Adornee = console
-    panel.Face = Enum.NormalId.Front
-    panel.CanvasSize = Vector2.new(600, 380)
-    panel.LightInfluence = 0
-    panel.Brightness = 1.4
-    panel.AlwaysOnTop = false
-    panel.Parent = console
+local function makeVoxel(parent, name, gridX, y, gridZ, color, material)
+    local size = CONFIG.BlockSize
+    local voxel = part(parent, name, Vector3.new(size, size, size), Vector3.new(gridX * size, y * size, gridZ * size), color, material, true)
+    voxel:SetAttribute("Voxel", true)
+    voxel:SetAttribute("GridX", gridX)
+    voxel:SetAttribute("GridY", y)
+    voxel:SetAttribute("GridZ", gridZ)
+    return voxel
+end
+
+local function createTerrain()
+    local floor = part(terrainFolder, "WorldFoundation", Vector3.new((CONFIG.MapRadius * 2 + 9) * CONFIG.BlockSize, 4, (CONFIG.MapRadius * 2 + 9) * CONFIG.BlockSize), Vector3.new(0, CONFIG.WorldFloorY, 0), Color3.fromRGB(31, 41, 52), Enum.Material.Slate, true)
+    floor.CanQuery = false
+
+    for x = -CONFIG.MapRadius, CONFIG.MapRadius do
+        for z = -CONFIG.MapRadius, CONFIG.MapRadius do
+            local height = heightAt(x, z)
+            local _, topColor = biomeAt(x, z)
+            for depth = height - 3, height - 1 do
+                local lower = depth <= height - 2
+                makeVoxel(terrainFolder, lower and "StoneLayer" or "SoilLayer", x, depth, z, lower and Color3.fromRGB(89, 94, 105) or Color3.fromRGB(91, 71, 53), lower and Enum.Material.Slate or Enum.Material.Ground)
+            end
+            makeVoxel(terrainFolder, "Surface", x, height, z, topColor, Enum.Material.Grass)
+        end
+        if x % 2 == 0 then task.wait() end
+    end
+end
+
+local function createTree(gridX, gridZ)
+    local height = heightAt(gridX, gridZ)
+    local baseY = height + 1
+    local model = Instance.new("Model")
+    model.Name = "AuroraTree"
+    model:SetAttribute("HarvestNode", true)
+    model:SetAttribute("NodeType", "Árbol de Aurora")
+    model:SetAttribute("DropType", "Madera")
+    model:SetAttribute("DropAmount", 4)
+    model:SetAttribute("MaxHealth", 4)
+    model:SetAttribute("Health", 4)
+    model:SetAttribute("RespawnSeconds", 75)
+    model:SetAttribute("ResourceColor", Color3.fromRGB(109, 223, 163))
+    model.Parent = harvestFolder
+
+    local trunk = makeVoxel(model, "Core", gridX, baseY, gridZ, Color3.fromRGB(105, 72, 47), Enum.Material.Wood)
+    trunk.Name = "HarvestCore"
+    makeVoxel(model, "TrunkUpper", gridX, baseY + 1, gridZ, Color3.fromRGB(105, 72, 47), Enum.Material.Wood).CanQuery = false
+    for _, offset in ipairs({ Vector3.new(0, 2, 0), Vector3.new(1, 2, 0), Vector3.new(-1, 2, 0), Vector3.new(0, 2, 1), Vector3.new(0, 2, -1), Vector3.new(0, 3, 0) }) do
+        local leaf = part(model, "AuroraLeaf", Vector3.new(CONFIG.BlockSize, CONFIG.BlockSize, CONFIG.BlockSize), trunk.Position + offset * CONFIG.BlockSize, Color3.fromRGB(76, 193, 133), Enum.Material.Grass, true)
+        leaf.CanQuery = false
+    end
+end
+
+local function createRock(gridX, gridZ, kind)
+    local height = heightAt(gridX, gridZ)
+    local config = kind == "Crystal" and {
+        name = "Cristal Lumen", drop = "Cristal", amount = 2, health = 5, color = Color3.fromRGB(114, 224, 255), material = Enum.Material.Neon, respawn = 150,
+    } or {
+        name = "Roca de Ceniza", drop = "Piedra", amount = 3, health = 3, color = Color3.fromRGB(111, 119, 131), material = Enum.Material.Slate, respawn = 90,
+    }
+
+    local model = Instance.new("Model")
+    model.Name = config.name
+    model:SetAttribute("HarvestNode", true)
+    model:SetAttribute("NodeType", config.name)
+    model:SetAttribute("DropType", config.drop)
+    model:SetAttribute("DropAmount", config.amount)
+    model:SetAttribute("MaxHealth", config.health)
+    model:SetAttribute("Health", config.health)
+    model:SetAttribute("RespawnSeconds", config.respawn)
+    model:SetAttribute("ResourceColor", config.color)
+    model.Parent = harvestFolder
+
+    local core = makeVoxel(model, "HarvestCore", gridX, height + 1, gridZ, config.color, config.material)
+    core.Size = Vector3.new(CONFIG.BlockSize * 1.15, CONFIG.BlockSize * 1.15, CONFIG.BlockSize * 1.15)
+    if kind == "Crystal" then
+        local glow = Instance.new("PointLight")
+        glow.Color = config.color
+        glow.Brightness = 1.5
+        glow.Range = 13
+        glow.Parent = core
+    end
+end
+
+local function createHarvestables()
+    for x = -18, -10, 2 do
+        for z = -7, 13, 4 do
+            if math.noise(x / 4, z / 4, CONFIG.Seed) > -0.2 then createTree(x, z) end
+        end
+    end
+    for x = 8, 18, 3 do
+        for z = -4, 15, 5 do
+            if math.noise(x / 3, z / 3, CONFIG.Seed) > -0.35 then createRock(x, z, "Rock") end
+        end
+    end
+    for x = -12, 12, 4 do
+        for z = -18, -10, 3 do
+            if math.noise(x / 3, z / 3, CONFIG.Seed) > -0.15 then createRock(x, z, "Crystal") end
+        end
+    end
+end
+
+local function physicalPanel(parent, face, title, subtitle, accent)
+    local gui = Instance.new("SurfaceGui")
+    gui.Name = "WorldPanel"
+    gui.Adornee = parent
+    gui.Face = face
+    gui.CanvasSize = Vector2.new(620, 360)
+    gui.LightInfluence = 0
+    gui.Brightness = 1.4
+    gui.Parent = parent
 
     local titleLabel = Instance.new("TextLabel")
-    titleLabel.Name = "Title"
     titleLabel.BackgroundTransparency = 1
-    titleLabel.Position = UDim2.new(0, 25, 0, 55)
-    titleLabel.Size = UDim2.new(1, -50, 0, 75)
+    titleLabel.Position = UDim2.new(0, 22, 0, 48)
+    titleLabel.Size = UDim2.new(1, -44, 0, 80)
     titleLabel.Font = Enum.Font.GothamBlack
     titleLabel.Text = title
     titleLabel.TextColor3 = accent
     titleLabel.TextScaled = true
-    titleLabel.Parent = panel
+    titleLabel.Parent = gui
 
     local subLabel = Instance.new("TextLabel")
     subLabel.Name = "Subtitle"
     subLabel.BackgroundTransparency = 1
-    subLabel.Position = UDim2.new(0, 30, 0, 150)
-    subLabel.Size = UDim2.new(1, -60, 0, 84)
+    subLabel.Position = UDim2.new(0, 28, 0, 145)
+    subLabel.Size = UDim2.new(1, -56, 0, 104)
     subLabel.Font = Enum.Font.GothamBold
     subLabel.Text = subtitle
-    subLabel.TextColor3 = Color3.fromRGB(220, 234, 245)
+    subLabel.TextColor3 = Color3.fromRGB(230, 241, 255)
     subLabel.TextWrapped = true
     subLabel.TextScaled = true
-    subLabel.Parent = panel
+    subLabel.Parent = gui
+    return gui
+end
+
+local function station(name, gridX, gridZ, accent, title, subtitle, promptName, action)
+    local height = heightAt(gridX, gridZ)
+    local groundY = height * CONFIG.BlockSize + CONFIG.BlockSize / 2
+    local base = part(structuresFolder, name .. "Base", Vector3.new(12, 1, 10), Vector3.new(gridX * CONFIG.BlockSize, groundY + 0.5, gridZ * CONFIG.BlockSize), Color3.fromRGB(20, 37, 50), Enum.Material.Metal, true)
+    base.CanQuery = false
+    local console = part(structuresFolder, name, Vector3.new(7, 7, 1), base.Position + Vector3.new(0, 4.1, 12), Color3.fromRGB(9, 23, 37), Enum.Material.Metal, true)
+    console.CanQuery = false
+    neon(structuresFolder, name .. "Light", Vector3.new(5.8, 0.16, 0.14), console.Position + Vector3.new(0, 2.3, -0.58), accent)
+    physicalPanel(console, Enum.NormalId.Front, title, subtitle, accent)
 
     if promptName then
         local prompt = Instance.new("ProximityPrompt")
         prompt.Name = promptName
-        prompt.ActionText = actionText
+        prompt.ActionText = action
         prompt.ObjectText = title
-        prompt.HoldDuration = 0.35
-        prompt.MaxActivationDistance = 12
+        prompt.HoldDuration = 0.25
+        prompt.MaxActivationDistance = 10
         prompt.RequiresLineOfSight = false
         prompt.KeyboardKeyCode = Enum.KeyCode.E
         prompt.Parent = console
     end
-
-    return console, panel
+    return console
 end
 
-local function getLayerForDepth(depth)
-    for _, layer in ipairs(LAYERS) do
-        if depth >= layer.MinDepth and depth <= layer.MaxDepth then
-            return layer
-        end
+local function createStructures()
+    local workshop = station("LumenWorkshop", -4, 4, Color3.fromRGB(255, 185, 80), "TALLER LUMEN", "CONVIERTE MADERA Y PIEDRA EN BLOQUES LUMEN", "WorkshopPrompt", "FABRICAR KIT")
+    local shrine = station("RestShrine", 5, 4, Color3.fromRGB(103, 241, 190), "SANTUARIO VIVO", "RECUPERA ENERGÍA Y GUARDA EL VIAJE", "RestPrompt", "DESCANSAR")
+    local beacon = station("AuroraBeacon", -15, -12, Color3.fromRGB(116, 226, 255), "BALIZA DE AURORA", "RESTAURA LA LUZ CON CRISTALES LUMEN", "BeaconPrompt", "RESTAURAR")
+    local rift = station("CrystalBeacon", 0, -16, Color3.fromRGB(199, 130, 255), "BALIZA DE LA GRIETA", "UN FARO PARA LAS CAVERNAS PRISMÁTICAS", "RiftPrompt", "RESTAURAR")
+    local ash = station("AshBeacon", 15, 4, Color3.fromRGB(255, 137, 74), "BALIZA DE CENIZA", "ENCIENDE LA RUTA A LAS LLANURAS", "AshPrompt", "RESTAURAR")
+
+    local boardGround = heightAt(-15, 17) * CONFIG.BlockSize + CONFIG.BlockSize / 2
+    local board = part(structuresFolder, "ExplorerBoard", Vector3.new(22, 11, 1), Vector3.new(-60, boardGround + 6, 68), Color3.fromRGB(9, 24, 39), Enum.Material.Metal, true)
+    board.CanQuery = false
+    physicalPanel(board, Enum.NormalId.Front, "REGISTRO DE EXPLORADORES", "AÚN NO HAY VIAJEROS REGISTRADOS", Color3.fromRGB(95, 218, 255))
+    neon(structuresFolder, "BoardLight", Vector3.new(18, 0.18, 0.15), board.Position + Vector3.new(0, 4.5, -0.58), Color3.fromRGB(95, 218, 255))
+
+    for _, console in ipairs({ workshop, shrine, beacon, rift, ash }) do
+        local light = Instance.new("PointLight")
+        light.Color = Color3.fromRGB(120, 221, 255)
+        light.Brightness = 1.2
+        light.Range = 16
+        light.Parent = console
     end
-    return LAYERS[#LAYERS]
 end
 
--- ======= SUPERFICIE ABIERTA =======
--- Antes había una plataforma de Grass encima de todo el pozo. Ahora sólo hay un anillo
--- alrededor de la mina, por lo que la primera capa queda expuesta y es minable.
-local function generateSurface()
-    local surfaceY = START_Y + 2
-    local ringThickness = 14
-    local sideLength = OUTER_WIDTH
-    local innerLength = MINE_WIDTH
-
-    makePart(worldFolder, "SurfaceNorth", Vector3.new(sideLength, 4, ringThickness), Vector3.new(0, surfaceY, (innerLength / 2) + (ringThickness / 2)), Color3.fromRGB(47, 116, 88), Enum.Material.Grass)
-    makePart(worldFolder, "SurfaceSouth", Vector3.new(sideLength, 4, ringThickness), Vector3.new(0, surfaceY, -(innerLength / 2) - (ringThickness / 2)), Color3.fromRGB(47, 116, 88), Enum.Material.Grass)
-    makePart(worldFolder, "SurfaceEast", Vector3.new(ringThickness, 4, innerLength), Vector3.new((innerLength / 2) + (ringThickness / 2), surfaceY, 0), Color3.fromRGB(47, 116, 88), Enum.Material.Grass)
-    makePart(worldFolder, "SurfaceWest", Vector3.new(ringThickness, 4, innerLength), Vector3.new(-(innerLength / 2) - (ringThickness / 2), surfaceY, 0), Color3.fromRGB(47, 116, 88), Enum.Material.Grass)
-
-    -- Borde industrial alrededor de la boca de la mina.
-    local edgeY = START_Y + 0.1
-    local edgeColor = Color3.fromRGB(34, 53, 71)
-    makePart(worldFolder, "MineRimNorth", Vector3.new(innerLength, 1.2, 1.2), Vector3.new(0, edgeY, innerLength / 2), edgeColor, Enum.Material.Metal)
-    makePart(worldFolder, "MineRimSouth", Vector3.new(innerLength, 1.2, 1.2), Vector3.new(0, edgeY, -innerLength / 2), edgeColor, Enum.Material.Metal)
-    makePart(worldFolder, "MineRimEast", Vector3.new(1.2, 1.2, innerLength), Vector3.new(innerLength / 2, edgeY, 0), edgeColor, Enum.Material.Metal)
-    makePart(worldFolder, "MineRimWest", Vector3.new(1.2, 1.2, innerLength), Vector3.new(-innerLength / 2, edgeY, 0), edgeColor, Enum.Material.Metal)
-
-    for i = -4, 4 do
-        makeNeonStrip(worldFolder, "RimLightN" .. i, Vector3.new(4, 0.18, 0.18), Vector3.new(i * 12, START_Y + 0.75, innerLength / 2 + 0.75), Color3.fromRGB(62, 220, 255))
-        makeNeonStrip(worldFolder, "RimLightS" .. i, Vector3.new(4, 0.18, 0.18), Vector3.new(i * 12, START_Y + 0.75, -innerLength / 2 - 0.75), Color3.fromRGB(62, 220, 255))
-    end
-
+local function createSpawn()
+    local height = heightAt(0, 0)
     local spawn = Instance.new("SpawnLocation")
-    spawn.Name = "MainSpawn"
+    spawn.Name = "LumenfallSpawn"
     spawn.Anchored = true
-    spawn.CanCollide = true
     spawn.Neutral = true
     spawn.Size = Vector3.new(8, 1, 8)
-    spawn.Position = Vector3.new(-OUTER_WIDTH / 2 + 9, START_Y + 4.5, OUTER_WIDTH / 2 - 7)
-    spawn.Transparency = 0.15
-    spawn.Color = Color3.fromRGB(71, 221, 191)
+    spawn.Position = Vector3.new(0, height * CONFIG.BlockSize + CONFIG.BlockSize / 2 + 0.5, 0)
+    spawn.Color = Color3.fromRGB(100, 228, 255)
     spawn.Material = Enum.Material.Neon
-    spawn.Parent = worldFolder
-
-    local spawnPad = makePart(worldFolder, "SpawnPad", Vector3.new(26, 1, 22), Vector3.new(-OUTER_WIDTH / 2 + 9, START_Y + 1, OUTER_WIDTH / 2 - 7), Color3.fromRGB(25, 48, 65), Enum.Material.Metal)
-    spawnPad.CanQuery = false
-
-    -- Estaciones físicas: el jugador encuentra las mejoras y contratos en el campamento, no en un menú invasivo.
-    local stationZ = OUTER_WIDTH / 2 - 7
-    createStation("ForgeStation", Vector3.new(-12, START_Y + 1, stationZ), Color3.fromRGB(255, 174, 67), "FORJA DE PROFUNDIDAD", "MEJORA LA POTENCIA BASE DEL PICO", "ForgePrompt", "FORJAR MEJORA")
-    createStation("ScannerStation", Vector3.new(10, START_Y + 1, stationZ), Color3.fromRGB(77, 225, 255), "ESCÁNER GEOLOGICO", "ACTIVA UNA VENTANA DE HALLAZGOS MEJORADOS", "ScannerPrompt", "ACTIVAR ESCÁNER")
-    createStation("ContractStation", Vector3.new(32, START_Y + 1, stationZ), Color3.fromRGB(95, 232, 190), "CONTRATOS DE MINERÍA", "ROMPE BLOQUES, DESCIENDE Y DESCUBRE MINERALES RAROS", "ContractPrompt", "RECLAMAR CONTRATO")
-    local eventBeacon, eventPanel = createStation("EventBeacon", Vector3.new(48, START_Y + 1, stationZ), Color3.fromRGB(196, 142, 255), "BALIZA DE EVENTOS", "SIN EVENTO ACTIVO // LA MINA ESTÁ ESTABLE", nil, nil)
-
-    -- Faros del campamento.
-    for _, x in ipairs({ -OUTER_WIDTH / 2 + 3, -OUTER_WIDTH / 2 + 15 }) do
-        local pole = makePart(worldFolder, "CampLightPole", Vector3.new(0.7, 9, 0.7), Vector3.new(x, START_Y + 6.5, OUTER_WIDTH / 2 - 3), Color3.fromRGB(50, 67, 82), Enum.Material.Metal)
-        local lamp = makePart(worldFolder, "CampLight", Vector3.new(2.4, 0.5, 2.4), pole.Position + Vector3.new(0, 4.8, 0), Color3.fromRGB(255, 224, 130), Enum.Material.Neon, 0, false)
-        local light = Instance.new("PointLight")
-        light.Color = Color3.fromRGB(100, 220, 255)
-        light.Brightness = 1.8
-        light.Range = 24
-        light.Parent = lamp
-    end
-
+    spawn.Transparency = 0.12
+    spawn.Parent = structuresFolder
 end
 
-local function createBlock(x, y, z, depth)
-    local layer = getLayerForDepth(depth)
-    local block = Instance.new("Part")
-    block.Name = layer.Name
-    block.Anchored = true
-    block.Size = Vector3.new(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)
-    block.Position = Vector3.new(x, y, z)
-    block.Color = layer.Color
-    block.Material = layer.Material
-    block.TopSurface = Enum.SurfaceType.Smooth
-    block.BottomSurface = Enum.SurfaceType.Smooth
-    block.CastShadow = depth <= 16
-    block:SetAttribute("LayerName", layer.Name)
-    block:SetAttribute("Rarity", layer.Rarity or "COMÚN")
-    block:SetAttribute("MaxHits", layer.Hits)
-    block:SetAttribute("HitsLeft", layer.Hits)
-    block:SetAttribute("Points", layer.Points)
-    block:SetAttribute("Depth", depth)
-    block:SetAttribute("IsMineable", true)
-    block:SetAttribute("IsPlaced", false)
-    block.Parent = blocksFolder
-    return block
+local function setAtmosphere()
+    Lighting.ClockTime = 15.2
+    Lighting.Brightness = 2.1
+    Lighting.Ambient = Color3.fromRGB(93, 118, 145)
+    Lighting.OutdoorAmbient = Color3.fromRGB(73, 93, 118)
+    Lighting.FogColor = Color3.fromRGB(103, 149, 171)
+    Lighting.FogEnd = 280
+
+    local old = Lighting:FindFirstChild("LumenfallAtmosphere")
+    if old then old:Destroy() end
+    local atmosphere = Instance.new("Atmosphere")
+    atmosphere.Name = "LumenfallAtmosphere"
+    atmosphere.Color = Color3.fromRGB(172, 215, 229)
+    atmosphere.Decay = Color3.fromRGB(94, 126, 159)
+    atmosphere.Density = 0.27
+    atmosphere.Glare = 0.12
+    atmosphere.Haze = 1.5
+    atmosphere.Parent = Lighting
 end
 
-local function createDepthLandmark(depth, title, accent)
-    local markerY = START_Y - (depth * BLOCK_SIZE) + 1
-    local marker = makePart(worldFolder, "ZoneMarker_" .. depth, Vector3.new(30, 4.5, 0.7), Vector3.new(0, markerY, -(MINE_WIDTH / 2 + 4)), Color3.fromRGB(12, 27, 42), Enum.Material.Metal, 0, true)
-    marker.CanQuery = false
-    makeNeonStrip(worldFolder, "ZoneMarkerLight_" .. depth, Vector3.new(26, 0.16, 0.14), marker.Position + Vector3.new(0, 1.6, 0.48), accent)
+setAtmosphere()
+createTerrain()
+createHarvestables()
+createStructures()
+createSpawn()
 
-    local panel = Instance.new("SurfaceGui")
-    panel.Name = "ZonePanel"
-    panel.Adornee = marker
-    panel.Face = Enum.NormalId.Back
-    panel.CanvasSize = Vector2.new(720, 180)
-    panel.LightInfluence = 0
-    panel.Brightness = 1.25
-    panel.Parent = marker
-
-    local text = Instance.new("TextLabel")
-    text.BackgroundTransparency = 1
-    text.Size = UDim2.new(1, 0, 1, 0)
-    text.Font = Enum.Font.GothamBlack
-    text.Text = title
-    text.TextColor3 = accent
-    text.TextStrokeColor3 = Color3.fromRGB(5, 13, 24)
-    text.TextStrokeTransparency = 0.15
-    text.TextScaled = true
-    text.Parent = panel
-end
-
-local function generateMine()
-    generateSurface()
-
-    -- Indices exactos de -9 a 8: 18 x 18, sin huecos laterales.
-    for depth = 1, TOTAL_DEPTH do
-        local y = START_Y - (depth * BLOCK_SIZE)
-        for xi = -HALF_GRID, HALF_GRID - 1 do
-            for zi = -HALF_GRID, HALF_GRID - 1 do
-                createBlock(xi * BLOCK_SIZE, y, zi * BLOCK_SIZE, depth)
-            end
-        end
-        -- Ceder un frame evita que la generación masiva congele Studio y permite que la mina aparezca progresivamente.
-        if depth % 2 == 0 then
-            task.wait()
-        end
-    end
-
-    createDepthLandmark(8, "CAPA DE GRANITO // TÚNELES ANTIGUOS", Color3.fromRGB(177, 167, 160))
-    createDepthLandmark(31, "VETA DE COBRE // GALERÍA INDUSTRIAL", Color3.fromRGB(244, 140, 91))
-    createDepthLandmark(55, "BÓVEDA DORADA // ZONA DE RIESGO", Color3.fromRGB(255, 206, 78))
-    createDepthLandmark(79, "CAVERNAS PRISMÁTICAS // GEMAS", Color3.fromRGB(100, 232, 255))
-    createDepthLandmark(102, "FRACTURA DE OBSIDIANA // ABISMO", Color3.fromRGB(201, 141, 255))
-
-    -- Piso real de seguridad: si se rompe todo, el jugador nunca cae al vacío.
-    local floor = makePart(boundariesFolder, "MineFloor", Vector3.new(OUTER_WIDTH + 40, 4, OUTER_WIDTH + 40), Vector3.new(0, FLOOR_Y, 0), Color3.fromRGB(19, 26, 38), Enum.Material.Basalt)
-    floor:SetAttribute("IsMineable", false)
-
-    -- Muros invisibles en los cuatro lados: protegen la zona incluso si se excava hasta el borde.
-    local wallThickness = 2
-    makePart(boundariesFolder, "BoundaryNorth", Vector3.new(OUTER_WIDTH + 40, WALL_HEIGHT, wallThickness), Vector3.new(0, WALL_CENTER_Y, OUTER_WIDTH / 2 + 18), Color3.fromRGB(255, 255, 255), Enum.Material.ForceField, 1, true)
-    makePart(boundariesFolder, "BoundarySouth", Vector3.new(OUTER_WIDTH + 40, WALL_HEIGHT, wallThickness), Vector3.new(0, WALL_CENTER_Y, -OUTER_WIDTH / 2 - 18), Color3.fromRGB(255, 255, 255), Enum.Material.ForceField, 1, true)
-    makePart(boundariesFolder, "BoundaryEast", Vector3.new(wallThickness, WALL_HEIGHT, OUTER_WIDTH + 40), Vector3.new(OUTER_WIDTH / 2 + 18, WALL_CENTER_Y, 0), Color3.fromRGB(255, 255, 255), Enum.Material.ForceField, 1, true)
-    makePart(boundariesFolder, "BoundaryWest", Vector3.new(wallThickness, WALL_HEIGHT, OUTER_WIDTH + 40), Vector3.new(-OUTER_WIDTH / 2 - 18, WALL_CENTER_Y, 0), Color3.fromRGB(255, 255, 255), Enum.Material.ForceField, 1, true)
-
-    -- Monitor físico de clasificación: está en el mundo, no en el HUD del jugador.
-    -- Se coloca al sur de la entrada y mira hacia el interior de la mina.
-    local boardPosition = Vector3.new(0, START_Y + 13, -(OUTER_WIDTH / 2 + 10))
-    local display = makePart(Workspace, "LeaderboardDisplay", Vector3.new(46, 23, 1), boardPosition, Color3.fromRGB(8, 19, 32), Enum.Material.Metal, 0, true)
-    display.CanQuery = false
-    display:SetAttribute("DisplayType", "MiningLeaderboard")
-
-    local displayFrame = makePart(worldFolder, "LeaderboardFrame", Vector3.new(49, 26, 1.6), boardPosition - Vector3.new(0, 0, 0.25), Color3.fromRGB(29, 60, 82), Enum.Material.Metal, 0, true)
-    displayFrame.CanQuery = false
-    local displayFace = makePart(worldFolder, "LeaderboardFace", Vector3.new(44, 21, 0.25), boardPosition - Vector3.new(0, 0, 1.1), Color3.fromRGB(6, 15, 27), Enum.Material.SmoothPlastic, 0, false)
-    displayFace.CanQuery = false
-    makeNeonStrip(worldFolder, "LeaderboardTopLight", Vector3.new(41, 0.18, 0.18), boardPosition + Vector3.new(0, 10.7, 1.1), Color3.fromRGB(78, 224, 255))
-
-    for _, xOffset in ipairs({ -17, 17 }) do
-        local post = makePart(worldFolder, "LeaderboardPost", Vector3.new(1.4, 14, 1.4), boardPosition + Vector3.new(xOffset, -17, 0), Color3.fromRGB(28, 48, 63), Enum.Material.Metal, 0, true)
-        post.CanQuery = false
-        local foot = makePart(worldFolder, "LeaderboardFoot", Vector3.new(7, 1.2, 6), post.Position - Vector3.new(0, 7.5, 0), Color3.fromRGB(22, 39, 52), Enum.Material.Metal, 0, true)
-        foot.CanQuery = false
-    end
-
-    Workspace:SetAttribute("MineWorldReady", true)
-    Workspace.FallenPartsDestroyHeight = FLOOR_Y - 30
-
-    print("[WorldGenerator] Mina generada:", GRID_SIZE, "x", GRID_SIZE, "x", TOTAL_DEPTH, "con superficie abierta y límites de seguridad.")
-end
-
-generateMine()
-
-_G.MINE_LAYERS = LAYERS
-_G.MINE_CONFIG = {
-    GRID_SIZE = GRID_SIZE,
-    BLOCK_SIZE = BLOCK_SIZE,
-    TOTAL_DEPTH = TOTAL_DEPTH,
-    START_Y = START_Y,
-    FLOOR_Y = FLOOR_Y,
-}
+Workspace:SetAttribute("LumenfallReady", true)
+print("[LumenfallWorld] Archipiélago voxel generado correctamente.")
