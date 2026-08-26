@@ -1,248 +1,502 @@
---[[
-	MiningHandler.server.lua
-	UBICACIÓN: ServerScriptService
+--[=[
+    MiningHandler.server.lua
+    UBICACIÓN: ServerScriptService
 
-	Este script es el "cerebro" del juego:
-	- Crea los RemoteEvents que usa el cliente para pedir romper un bloque
-	- VALIDA en el servidor que el jugador realmente pueda romper ese bloque
-	  (distancia, que exista, cooldown) para evitar exploits/cheats
-	- Otorga puntos y actualiza el nivel de picador del jugador
-	- Guarda el progreso con DataStore para que no se pierda al salir
-]]
+    Cerebro seguro de la mina:
+    - Valida cada golpe y cada bloque en el servidor.
+    - Guarda puntos, profundidad, bloques rotos, tiempo jugado y récord de velocidad.
+    - Publica rankings vivos del servidor para el monitor 3D.
+    - Permite construir bloques de vuelta en modo construcción.
+]=]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local DataStoreService = game:GetService("DataStoreService")
 
-local mineDataStore = DataStoreService:GetDataStore("MiningGame_PlayerData_v1")
+local mineDataStore = DataStoreService:GetDataStore("MiningGame_PlayerData_v2")
+local blocksFolder = Workspace:WaitForChild("MineBlocks", 30)
 
--- ======= REMOTE EVENTS =======
--- Carpeta de RemoteEvents dentro de ReplicatedStorage para comunicación cliente-servidor
-local remotesFolder = Instance.new("Folder")
-remotesFolder.Name = "MiningRemotes"
-remotesFolder.Parent = ReplicatedStorage
-
-local mineBlockEvent = Instance.new("RemoteEvent")
-mineBlockEvent.Name = "MineBlockRequest"       -- Cliente -> Servidor: "quiero minar este bloque"
-mineBlockEvent.Parent = remotesFolder
-
-local blockHitEvent = Instance.new("RemoteEvent")
-blockHitEvent.Name = "BlockHit"                -- Servidor -> Cliente: "el bloque recibió un golpe" (para efectos)
-blockHitEvent.Parent = remotesFolder
-
-local blockBrokenEvent = Instance.new("RemoteEvent")
-blockBrokenEvent.Name = "BlockBroken"          -- Servidor -> Cliente: "el bloque se rompió" (para efectos + sonido)
-blockBrokenEvent.Parent = remotesFolder
-
-local statsUpdateEvent = Instance.new("RemoteEvent")
-statsUpdateEvent.Name = "StatsUpdate"          -- Servidor -> Cliente: actualiza la UI (puntos, nivel, profundidad)
-statsUpdateEvent.Parent = remotesFolder
-
-local notifyEvent = Instance.new("RemoteEvent")
-notifyEvent.Name = "Notify"                    -- Servidor -> Cliente: notificaciones tipo "¡Subiste de nivel!"
-notifyEvent.Parent = remotesFolder
-
--- ======= NIVELES DE PICADOR =======
--- Mientras más puntos totales tenga el jugador, mejor es su pico
--- (rompe bloques más rápido: menos golpes necesarios).
-local PICKAXE_LEVELS = {
-	{ Name = "Pico de Madera",   MinPoints = 0,    Power = 1 },
-	{ Name = "Pico de Piedra",   MinPoints = 50,   Power = 2 },
-	{ Name = "Pico de Hierro",   MinPoints = 150,  Power = 3 },
-	{ Name = "Pico de Oro",      MinPoints = 400,  Power = 4 },
-	{ Name = "Pico de Diamante", MinPoints = 800,  Power = 6 },
-	{ Name = "Pico de Esmeralda",MinPoints = 1500, Power = 8 },
-	{ Name = "Pico Legendario",  MinPoints = 3000, Power = 12 },
+local CONFIG = {
+    MaxMineDistance = 18,
+    HitCooldown = 0.13,
+    BuildCooldown = 0.25,
+    AutoSaveSeconds = 120,
+    LeaderboardLimit = 6,
+    BlockSize = Workspace:GetAttribute("MineBlockSize") or 6,
+    StartY = Workspace:GetAttribute("MineStartY") or 64,
+    GridSize = Workspace:GetAttribute("MineGridSize") or 18,
+    TotalDepth = Workspace:GetAttribute("MineTotalDepth") or 110,
 }
 
--- Distancia máxima permitida entre jugador y bloque para poder minarlo (anti-cheat)
-local MAX_MINE_DISTANCE = 15
+local MINE_WIDTH = CONFIG.GridSize * CONFIG.BlockSize
+local HALF_GRID = math.floor(CONFIG.GridSize / 2)
+local MIN_GRID_COORD = -HALF_GRID * CONFIG.BlockSize
+local MAX_GRID_COORD = (HALF_GRID - 1) * CONFIG.BlockSize
 
--- Cooldown mínimo entre golpes (en segundos) para evitar spam de RemoteEvent
-local HIT_COOLDOWN = 0.15
+-- ======= REMOTES =======
+local remotesFolder = ReplicatedStorage:FindFirstChild("MiningRemotes")
+if not remotesFolder then
+    remotesFolder = Instance.new("Folder")
+    remotesFolder.Name = "MiningRemotes"
+    remotesFolder.Parent = ReplicatedStorage
+end
 
--- Tablas en memoria con el estado de cada jugador
-local playerData = {}     -- [Player] = { Points = 0, MaxDepth = 0, LastHitTime = 0 }
+local function getOrCreateRemote(name, className)
+    local remote = remotesFolder:FindFirstChild(name)
+    if not remote then
+        remote = Instance.new(className or "RemoteEvent")
+        remote.Name = name
+        remote.Parent = remotesFolder
+    end
+    return remote
+end
 
--- ======= FUNCIONES AUXILIARES =======
+local mineBlockEvent = getOrCreateRemote("MineBlockRequest")
+local blockHitEvent = getOrCreateRemote("BlockHit")
+local blockBrokenEvent = getOrCreateRemote("BlockBroken")
+local statsUpdateEvent = getOrCreateRemote("StatsUpdate")
+local notifyEvent = getOrCreateRemote("Notify")
+local leaderboardUpdateEvent = getOrCreateRemote("LeaderboardUpdate")
+local placeBlockEvent = getOrCreateRemote("PlaceBlockRequest")
+local blockPlacedEvent = getOrCreateRemote("BlockPlaced")
+
+-- ======= PROGRESIÓN DEL PICO =======
+local PICKAXE_LEVELS = {
+    { Name = "Pico de Madera",    MinPoints = 0,    Power = 1 },
+    { Name = "Pico de Piedra",    MinPoints = 50,   Power = 2 },
+    { Name = "Pico de Hierro",    MinPoints = 150,  Power = 3 },
+    { Name = "Pico de Oro",       MinPoints = 400,  Power = 4 },
+    { Name = "Pico de Diamante",  MinPoints = 800,  Power = 6 },
+    { Name = "Pico de Esmeralda", MinPoints = 1500, Power = 8 },
+    { Name = "Pico Legendario",   MinPoints = 3000, Power = 12 },
+}
+
+local playerData = {}
 
 local function getPickaxeLevel(points)
-	local current = PICKAXE_LEVELS[1]
-	for _, level in ipairs(PICKAXE_LEVELS) do
-		if points >= level.MinPoints then
-			current = level
-		end
-	end
-	return current
+    local current = PICKAXE_LEVELS[1]
+    for _, level in ipairs(PICKAXE_LEVELS) do
+        if points >= level.MinPoints then
+            current = level
+        end
+    end
+    return current
 end
 
 local function getNextPickaxeLevel(points)
-	for _, level in ipairs(PICKAXE_LEVELS) do
-		if points < level.MinPoints then
-			return level
-		end
-	end
-	return nil -- ya está en el nivel máximo
+    for _, level in ipairs(PICKAXE_LEVELS) do
+        if points < level.MinPoints then
+            return level
+        end
+    end
+    return nil
 end
 
--- Envía al cliente el estado actual (puntos, nivel, profundidad máxima)
+local function getPlayTime(data)
+    return math.max(0, (data.PlayTime or 0) + math.floor(time() - (data.SessionStartedAt or time())))
+end
+
+local function getCurrentDepth(player)
+    local character = player.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return 0 end
+    return math.clamp(math.max(0, math.floor((CONFIG.StartY - hrp.Position.Y) / CONFIG.BlockSize)), 0, CONFIG.TotalDepth)
+end
+
+local function ensureLeaderstats(player)
+    local leaderstats = player:FindFirstChild("leaderstats")
+    if not leaderstats then
+        leaderstats = Instance.new("Folder")
+        leaderstats.Name = "leaderstats"
+        leaderstats.Parent = player
+    end
+
+    local function value(name, className)
+        local item = leaderstats:FindFirstChild(name)
+        if not item then
+            item = Instance.new(className or "IntValue")
+            item.Name = name
+            item.Parent = leaderstats
+        end
+        return item
+    end
+
+    return {
+        Points = value("Puntos"),
+        Depth = value("Profundidad"),
+        Blocks = value("Bloques"),
+        Time = value("TiempoMin", "IntValue"),
+    }
+end
+
+local function updateLeaderstats(player, currentDepth)
+    local data = playerData[player]
+    if not data then return end
+    local stats = ensureLeaderstats(player)
+    stats.Points.Value = data.Points
+    stats.Depth.Value = data.MaxDepth
+    stats.Blocks.Value = data.BlocksMined
+    stats.Time.Value = math.floor(getPlayTime(data) / 60)
+end
+
+local function makeEntry(player)
+    local data = playerData[player]
+    if not data then return nil end
+    return {
+        Name = player.DisplayName,
+        Username = player.Name,
+        UserId = player.UserId,
+        Points = data.Points,
+        MaxDepth = data.MaxDepth,
+        BlocksMined = data.BlocksMined,
+        PlayTime = getPlayTime(data),
+        BestDepthTime = data.BestDepthTime or 0,
+    }
+end
+
+local function sortedCopy(entries, comparator)
+    local copy = table.clone(entries)
+    table.sort(copy, comparator)
+    return copy
+end
+
+local function buildLeaderboardPayload()
+    local entries = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        local entry = makeEntry(player)
+        if entry then table.insert(entries, entry) end
+    end
+
+    local depth = sortedCopy(entries, function(a, b)
+        if a.MaxDepth == b.MaxDepth then return a.Points > b.Points end
+        return a.MaxDepth > b.MaxDepth
+    end)
+    local speed = sortedCopy(entries, function(a, b)
+        local aTime = a.BestDepthTime > 0 and a.BestDepthTime or math.huge
+        local bTime = b.BestDepthTime > 0 and b.BestDepthTime or math.huge
+        if aTime == bTime then return a.MaxDepth > b.MaxDepth end
+        return aTime < bTime
+    end)
+    local points = sortedCopy(entries, function(a, b)
+        if a.Points == b.Points then return a.MaxDepth > b.MaxDepth end
+        return a.Points > b.Points
+    end)
+
+    local function limit(list)
+        local result = {}
+        for index = 1, math.min(CONFIG.LeaderboardLimit, #list) do
+            result[index] = list[index]
+        end
+        return result
+    end
+
+    return {
+        Depth = limit(depth),
+        Speed = limit(speed),
+        Points = limit(points),
+        ServerSize = #entries,
+        UpdatedAt = os.time(),
+    }
+end
+
+local function broadcastLeaderboards()
+    leaderboardUpdateEvent:FireAllClients(buildLeaderboardPayload())
+end
+
 local function sendStatsUpdate(player)
-	local data = playerData[player]
-	if not data then return end
+    local data = playerData[player]
+    if not data then return end
 
-	local currentLevel = getPickaxeLevel(data.Points)
-	local nextLevel = getNextPickaxeLevel(data.Points)
+    local currentLevel = getPickaxeLevel(data.Points)
+    local nextLevel = getNextPickaxeLevel(data.Points)
+    local currentDepth = getCurrentDepth(player)
+    updateLeaderstats(player, currentDepth)
 
-	statsUpdateEvent:FireClient(player, {
-		Points = data.Points,
-		MaxDepth = data.MaxDepth,
-		PickaxeName = currentLevel.Name,
-		PickaxePower = currentLevel.Power,
-		NextLevelPoints = nextLevel and nextLevel.MinPoints or nil,
-		NextLevelName = nextLevel and nextLevel.Name or nil,
-	})
+    statsUpdateEvent:FireClient(player, {
+        Points = data.Points,
+        MaxDepth = data.MaxDepth,
+        CurrentDepth = currentDepth,
+        BlocksMined = data.BlocksMined,
+        PlayTime = getPlayTime(data),
+        BestDepthTime = data.BestDepthTime or 0,
+        PickaxeName = currentLevel.Name,
+        PickaxePower = currentLevel.Power,
+        CurrentLevelPoints = currentLevel.MinPoints,
+        NextLevelPoints = nextLevel and nextLevel.MinPoints or nil,
+        NextLevelName = nextLevel and nextLevel.Name or nil,
+        MineTotalDepth = CONFIG.TotalDepth,
+    })
 end
 
--- Carga los datos guardados del jugador (o crea datos nuevos)
+-- ======= DATOS =======
+local function newPlayerData()
+    return {
+        Points = 0,
+        MaxDepth = 0,
+        BlocksMined = 0,
+        PlayTime = 0,
+        BestDepthTime = 0,
+        LastHitTime = 0,
+        LastBuildTime = 0,
+        SessionStartedAt = time(),
+    }
+end
+
 local function loadPlayerData(player)
-	local success, savedData = pcall(function()
-		return mineDataStore:GetAsync("Player_" .. player.UserId)
-	end)
+    local data = newPlayerData()
+    local success, savedData = pcall(function()
+        return mineDataStore:GetAsync("Player_" .. player.UserId)
+    end)
 
-	if success and savedData then
-		playerData[player] = {
-			Points = savedData.Points or 0,
-			MaxDepth = savedData.MaxDepth or 0,
-			LastHitTime = 0,
-		}
-	else
-		playerData[player] = {
-			Points = 0,
-			MaxDepth = 0,
-			LastHitTime = 0,
-		}
-	end
+    if success and type(savedData) == "table" then
+        data.Points = tonumber(savedData.Points) or 0
+        data.MaxDepth = tonumber(savedData.MaxDepth) or 0
+        data.BlocksMined = tonumber(savedData.BlocksMined) or 0
+        data.PlayTime = tonumber(savedData.PlayTime) or 0
+        data.BestDepthTime = tonumber(savedData.BestDepthTime) or 0
+    elseif not success then
+        warn("[MiningHandler] No se pudieron cargar los datos de", player.Name)
+    end
 
-	sendStatsUpdate(player)
+    playerData[player] = data
+    ensureLeaderstats(player)
+    sendStatsUpdate(player)
+    broadcastLeaderboards()
 end
 
--- Guarda los datos del jugador en el DataStore
 local function savePlayerData(player)
-	local data = playerData[player]
-	if not data then return end
+    local data = playerData[player]
+    if not data then return end
 
-	local success, err = pcall(function()
-		mineDataStore:SetAsync("Player_" .. player.UserId, {
-			Points = data.Points,
-			MaxDepth = data.MaxDepth,
-		})
-	end)
+    local payload = {
+        Points = data.Points,
+        MaxDepth = data.MaxDepth,
+        BlocksMined = data.BlocksMined,
+        PlayTime = getPlayTime(data),
+        BestDepthTime = data.BestDepthTime,
+    }
 
-	if not success then
-		warn("[MiningHandler] Error guardando datos de", player.Name, ":", err)
-	end
+    local success, err = pcall(function()
+        mineDataStore:SetAsync("Player_" .. player.UserId, payload)
+    end)
+    if not success then
+        warn("[MiningHandler] Error guardando datos de", player.Name, ":", err)
+    end
 end
 
--- ======= LÓGICA PRINCIPAL: MINAR UN BLOQUE =======
+-- ======= VALIDACIONES COMUNES =======
+local function isMineBlock(block)
+    return block and block:IsA("BasePart") and block.Parent and blocksFolder and block:IsDescendantOf(blocksFolder) and block:GetAttribute("IsMineable") == true
+end
 
+local function getCharacterRoot(player)
+    local character = player.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    return hrp
+end
+
+local function withinMineRange(player, position)
+    local hrp = getCharacterRoot(player)
+    return hrp and (hrp.Position - position).Magnitude <= CONFIG.MaxMineDistance
+end
+
+local function recordDepthProgress(player)
+    local data = playerData[player]
+    if not data then return false end
+
+    local currentDepth = getCurrentDepth(player)
+    if currentDepth <= data.MaxDepth then
+        return false
+    end
+
+    data.MaxDepth = currentDepth
+    local runTime = getPlayTime(data)
+    if data.BestDepthTime == 0 or runTime < data.BestDepthTime then
+        data.BestDepthTime = runTime
+    end
+    return true
+end
+
+-- ======= MINERÍA =======
 local function onMineBlockRequest(player, block)
-	-- Validaciones de seguridad (todo esto pasa en servidor, nunca confiar en el cliente)
-	if not block or not block:IsA("BasePart") then return end
-	if not block:GetAttribute("IsMineable") then return end
-	if not block.Parent then return end -- ya fue removido
+    if not isMineBlock(block) then return end
 
-	local data = playerData[player]
-	if not data then return end
+    local data = playerData[player]
+    if not data then return end
 
-	-- Cooldown anti-spam
-	local now = os.clock()
-	if now - data.LastHitTime < HIT_COOLDOWN then return end
-	data.LastHitTime = now
+    local now = time()
+    if now - data.LastHitTime < CONFIG.HitCooldown then return end
+    data.LastHitTime = now
 
-	-- Validar distancia (anti-cheat: que el jugador esté cerca del bloque)
-	local character = player.Character
-	if not character then return end
-	local hrp = character:FindFirstChild("HumanoidRootPart")
-	if not hrp then return end
+    if not withinMineRange(player, block.Position) then return end
 
-	local distance = (hrp.Position - block.Position).Magnitude
-	if distance > MAX_MINE_DISTANCE then return end
+    local hitsLeft = tonumber(block:GetAttribute("HitsLeft")) or 1
+    local maxHits = tonumber(block:GetAttribute("MaxHits")) or hitsLeft
+    local power = getPickaxeLevel(data.Points).Power
+    hitsLeft = hitsLeft - power
+    block:SetAttribute("HitsLeft", math.max(hitsLeft, 0))
 
-	-- Calcular poder de minado según el nivel de pico del jugador
-	local pickaxeLevel = getPickaxeLevel(data.Points)
-	local power = pickaxeLevel.Power
+    if hitsLeft > 0 then
+        blockHitEvent:FireClient(player, block, hitsLeft, maxHits)
+        return
+    end
 
-	local hitsLeft = block:GetAttribute("HitsLeft") - power
-	block:SetAttribute("HitsLeft", math.max(hitsLeft, 0))
+    local points = tonumber(block:GetAttribute("Points")) or 0
+    local depth = tonumber(block:GetAttribute("Depth")) or 0
+    local layerName = tostring(block:GetAttribute("LayerName") or "Bloque")
+    local previousLevel = getPickaxeLevel(data.Points)
 
-	if hitsLeft > 0 then
-		-- El bloque aguantó el golpe, avisar al cliente para efectos visuales (partículas, cámara shake, etc.)
-		blockHitEvent:FireClient(player, block, hitsLeft, block:GetAttribute("MaxHits"))
-	else
-		-- ¡Bloque destruido!
-		local points = block:GetAttribute("Points")
-		local depth = block:GetAttribute("Depth")
-		local layerName = block:GetAttribute("LayerName")
+    data.Points = data.Points + points
+    data.BlocksMined = data.BlocksMined + 1
+    if depth > data.MaxDepth then
+        data.MaxDepth = depth
+        local runTime = getPlayTime(data)
+        if data.BestDepthTime == 0 or runTime < data.BestDepthTime then
+            data.BestDepthTime = runTime
+        end
+    end
 
-		local previousLevel = getPickaxeLevel(data.Points)
+    local newLevel = getPickaxeLevel(data.Points)
+    blockBrokenEvent:FireClient(player, block, layerName, points, data.Points, data.MaxDepth)
+    block:SetAttribute("IsMineable", false)
+    block:Destroy()
 
-		data.Points += points
-		if depth > data.MaxDepth then
-			data.MaxDepth = depth
-		end
+    if newLevel.Name ~= previousLevel.Name then
+        notifyEvent:FireClient(player, ("NUEVO PICO DESBLOQUEADO  //  %s"):format(newLevel.Name))
+    end
 
-		local newLevel = getPickaxeLevel(data.Points)
-
-		-- Avisar a todos los clientes cercanos que el bloque se rompió (para efectos)
-		blockBrokenEvent:FireClient(player, block, layerName, points)
-
-		block:SetAttribute("IsMineable", false)
-		block:Destroy()
-
-		-- Si subió de nivel de pico, notificar
-		if newLevel.Name ~= previousLevel.Name then
-			notifyEvent:FireClient(player, ("¡Subiste de nivel! Ahora tienes: %s"):format(newLevel.Name))
-		end
-
-		sendStatsUpdate(player)
-	end
+    sendStatsUpdate(player)
+    broadcastLeaderboards()
 end
 
 mineBlockEvent.OnServerEvent:Connect(onMineBlockRequest)
 
--- ======= EVENTOS DE JUGADORES =======
+-- ======= CONSTRUCCIÓN =======
+local normalVectors = {
+    [Enum.NormalId.Top] = Vector3.new(0, 1, 0),
+    [Enum.NormalId.Bottom] = Vector3.new(0, -1, 0),
+    [Enum.NormalId.Front] = Vector3.new(0, 0, -1),
+    [Enum.NormalId.Back] = Vector3.new(0, 0, 1),
+    [Enum.NormalId.Left] = Vector3.new(-1, 0, 0),
+    [Enum.NormalId.Right] = Vector3.new(1, 0, 0),
+}
 
+local function isPositionInsideMine(position)
+    return position.X >= MIN_GRID_COORD and position.X <= MAX_GRID_COORD
+        and position.Z >= MIN_GRID_COORD and position.Z <= MAX_GRID_COORD
+        and position.Y <= CONFIG.StartY + CONFIG.BlockSize / 2
+        and position.Y >= (Workspace:GetAttribute("MineFloorY") or -700) + CONFIG.BlockSize / 2
+end
+
+local function hasOccupant(position, ignorePart)
+    local overlapParams = OverlapParams.new()
+    overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+    overlapParams.FilterDescendantsInstances = { ignorePart }
+    local parts = Workspace:GetPartBoundsInBox(CFrame.new(position), Vector3.new(CONFIG.BlockSize - 0.2, CONFIG.BlockSize - 0.2, CONFIG.BlockSize - 0.2), overlapParams)
+    for _, part in ipairs(parts) do
+        if part:IsDescendantOf(blocksFolder) then
+            return true
+        end
+    end
+    return false
+end
+
+local function onPlaceBlockRequest(player, target, normalId)
+    if not isMineBlock(target) then return end
+    local direction = normalVectors[normalId]
+    if not direction then return end
+
+    local data = playerData[player]
+    if not data then return end
+    local now = time()
+    if now - data.LastBuildTime < CONFIG.BuildCooldown then return end
+
+    local targetPosition = target.Position
+    local candidate = targetPosition + direction * CONFIG.BlockSize
+    candidate = Vector3.new(
+        math.round(candidate.X / CONFIG.BlockSize) * CONFIG.BlockSize,
+        math.round(candidate.Y / CONFIG.BlockSize) * CONFIG.BlockSize,
+        math.round(candidate.Z / CONFIG.BlockSize) * CONFIG.BlockSize
+    )
+
+    if not isPositionInsideMine(candidate) then return end
+    if not withinMineRange(player, candidate) then return end
+    if hasOccupant(candidate, target) then return end
+
+    data.LastBuildTime = now
+    local block = Instance.new("Part")
+    block.Name = "Construido"
+    block.Anchored = true
+    block.Size = Vector3.new(CONFIG.BlockSize, CONFIG.BlockSize, CONFIG.BlockSize)
+    block.Position = candidate
+    block.Color = Color3.fromRGB(63, 174, 201)
+    block.Material = Enum.Material.SmoothPlastic
+    block.TopSurface = Enum.SurfaceType.Smooth
+    block.BottomSurface = Enum.SurfaceType.Smooth
+    block:SetAttribute("LayerName", "Construido")
+    block:SetAttribute("MaxHits", 3)
+    block:SetAttribute("HitsLeft", 3)
+    block:SetAttribute("Points", 0)
+    block:SetAttribute("Depth", math.max(1, math.floor((CONFIG.StartY - candidate.Y) / CONFIG.BlockSize)))
+    block:SetAttribute("IsMineable", true)
+    block:SetAttribute("IsPlaced", true)
+    block.Parent = blocksFolder
+
+    blockPlacedEvent:FireAllClients(block, player.DisplayName)
+    notifyEvent:FireClient(player, "BLOQUE COLOCADO  //  MODO CONSTRUCCIÓN")
+end
+
+placeBlockEvent.OnServerEvent:Connect(onPlaceBlockRequest)
+
+-- ======= EVENTOS DE JUGADORES Y ACTUALIZACIÓN VIVA =======
 Players.PlayerAdded:Connect(function(player)
-	loadPlayerData(player)
-
-	player.CharacterAdded:Connect(function(character)
-		-- Pequeño delay para que el HumanoidRootPart exista
-		task.wait(0.5)
-		sendStatsUpdate(player)
-	end)
+    loadPlayerData(player)
+    player.CharacterAdded:Connect(function()
+        task.wait(0.6)
+        sendStatsUpdate(player)
+    end)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-	savePlayerData(player)
-	playerData[player] = nil
+    savePlayerData(player)
+    playerData[player] = nil
+    broadcastLeaderboards()
 end)
 
--- Autoguardado cada 2 minutos por si el servidor se cae
 task.spawn(function()
-	while true do
-		task.wait(120)
-		for _, player in ipairs(Players:GetPlayers()) do
-			savePlayerData(player)
-		end
-	end
+    while true do
+        task.wait(1)
+        for _, player in ipairs(Players:GetPlayers()) do
+            local data = playerData[player]
+            if data then
+                local progressed = recordDepthProgress(player)
+                sendStatsUpdate(player)
+                if progressed then
+                    notifyEvent:FireClient(player, ("NUEVO RÉCORD DE PROFUNDIDAD  //  %dm"):format(data.MaxDepth))
+                    broadcastLeaderboards()
+                end
+            end
+        end
+    end
 end)
 
--- Guardar también si el servidor se está cerrando
+task.spawn(function()
+    while true do
+        task.wait(CONFIG.AutoSaveSeconds)
+        for _, player in ipairs(Players:GetPlayers()) do
+            savePlayerData(player)
+        end
+        broadcastLeaderboards()
+    end
+end)
+
 game:BindToClose(function()
-	for _, player in ipairs(Players:GetPlayers()) do
-		savePlayerData(player)
-	end
+    for _, player in ipairs(Players:GetPlayers()) do
+        savePlayerData(player)
+    end
 end)
 
-print("[MiningHandler] Sistema de minería listo.")
+broadcastLeaderboards()
+print("[MiningHandler] Sistema seguro de minería, construcción y rankings listo.")
