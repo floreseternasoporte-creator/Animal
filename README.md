@@ -84,3 +84,9 @@ La mina deja de ser una cuadrícula de bloques sin propósito. En la superficie 
 El pozo también recibe cinco **hitos físicos de profundidad**: Túneles Antiguos, Galería Industrial, Bóveda Dorada, Cavernas Prismáticas y Fractura de Obsidiana. Funcionan como referencias espaciales reales dentro de la mina y separan visualmente el descenso en zonas.
 
 > Para usar esta expansión, reemplaza `WorldGenerator.server.lua`, `MiningHandler.server.lua` y `MiningAudio.client.lua` por las versiones actuales. Las estaciones se generan automáticamente cuando inicia el mundo.
+
+## Pase de calidad y estabilidad
+
+La versión actual incorpora correcciones que no siempre se ven, pero evitan fallos durante partidas largas. El generador publica las dimensiones de la mina antes de que el servidor active las validaciones, de modo que construcción, límites y profundidad usan siempre el tamaño correcto. Los recursos naturales se regeneran por rareza, pero nunca reaparecen sobre un jugador ni ocupan una celda que ya esté llena.
+
+El guardado usa `UpdateAsync` para reducir el riesgo de sobrescribir progreso durante cierres o guardados cercanos. Las estadísticas en vivo se envían cada tres segundos en vez de cada fotograma, y las sombras se reservan para las primeras capas de la mina para disminuir la carga gráfica sin afectar el aspecto inicial del mundo.

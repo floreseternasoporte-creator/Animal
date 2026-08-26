@@ -322,7 +322,9 @@ local function savePlayerData(player)
     }
 
     local success, err = pcall(function()
-        mineDataStore:SetAsync("Player_" .. player.UserId, payload)
+        mineDataStore:UpdateAsync("Player_" .. player.UserId, function()
+            return payload
+        end)
     end)
     if not success then
         warn("[MiningHandler] Error guardando datos de", player.Name, ":", err)
@@ -467,6 +469,47 @@ local function recordDepthProgress(player)
     return true
 end
 
+-- ======= REGENERACIÓN DE RECURSOS =======
+local function scheduleResourceRegeneration(block)
+    if not block or block:GetAttribute("IsPlaced") then return end
+
+    local template = block:Clone()
+    template.Parent = nil
+    template:SetAttribute("IsMineable", true)
+    template:SetAttribute("HitsLeft", template:GetAttribute("MaxHits") or 1)
+
+    local rarity = tostring(template:GetAttribute("Rarity") or "COMÚN")
+    local delayByRarity = {
+        ["COMÚN"] = 90,
+        ["POCO COMÚN"] = 120,
+        ["RARA"] = 150,
+        ["ÉPICA"] = 180,
+        ["MÍTICA"] = 210,
+        ["LEGENDARIA"] = 240,
+        ["ANCIANA"] = 300,
+    }
+    local respawnDelay = delayByRarity[rarity] or 150
+
+    local attemptRestore
+    attemptRestore = function()
+        if not blocksFolder.Parent then return end
+        for _, existing in ipairs(blocksFolder:GetChildren()) do
+            if existing:IsA("BasePart") and (existing.Position - template.Position).Magnitude < 0.5 then
+                return
+            end
+        end
+        for _, otherPlayer in ipairs(Players:GetPlayers()) do
+            local root = getCharacterRoot(otherPlayer)
+            if root and (root.Position - template.Position).Magnitude < CONFIG.BlockSize then
+                task.delay(15, attemptRestore)
+                return
+            end
+        end
+        template.Parent = blocksFolder
+    end
+    task.delay(respawnDelay, attemptRestore)
+end
+
 -- ======= MINERÍA =======
 local function onMineBlockRequest(player, block)
     if not isMineBlock(block) then return end
@@ -515,6 +558,7 @@ local function onMineBlockRequest(player, block)
 
     local newLevel = getPickaxeLevel(data.Points)
     blockBrokenEvent:FireClient(player, block, layerName, points, data.Points, data.MaxDepth, rarity)
+    scheduleResourceRegeneration(block)
     if rarity ~= "COMÚN" or points >= 100 then
         specialDiscoveryEvent:FireClient(player, layerName, rarity, points, depth)
     end
@@ -630,7 +674,7 @@ end)
 
 task.spawn(function()
     while true do
-        task.wait(1)
+        task.wait(3)
         for _, player in ipairs(Players:GetPlayers()) do
             local data = playerData[player]
             if data then

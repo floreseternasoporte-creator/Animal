@@ -61,6 +61,14 @@ local boundariesFolder = Instance.new("Folder")
 boundariesFolder.Name = "MineBoundaries"
 boundariesFolder.Parent = Workspace
 
+-- Publicar la configuración antes de crear los bloques evita que otros scripts lean tamaños antiguos.
+Workspace:SetAttribute("MineGridSize", GRID_SIZE)
+Workspace:SetAttribute("MineBlockSize", BLOCK_SIZE)
+Workspace:SetAttribute("MineTotalDepth", TOTAL_DEPTH)
+Workspace:SetAttribute("MineStartY", START_Y)
+Workspace:SetAttribute("MineFloorY", FLOOR_Y)
+Workspace:SetAttribute("MineWorldReady", false)
+
 local function makePart(parent, name, size, position, color, material, transparency, canCollide)
     local part = Instance.new("Part")
     part.Name = name
@@ -225,7 +233,7 @@ local function createBlock(x, y, z, depth)
     block.Material = layer.Material
     block.TopSurface = Enum.SurfaceType.Smooth
     block.BottomSurface = Enum.SurfaceType.Smooth
-    block.CastShadow = true
+    block.CastShadow = depth <= 16
     block:SetAttribute("LayerName", layer.Name)
     block:SetAttribute("Rarity", layer.Rarity or "COMÚN")
     block:SetAttribute("MaxHits", layer.Hits)
@@ -319,11 +327,7 @@ local function generateMine()
         foot.CanQuery = false
     end
 
-    Workspace:SetAttribute("MineGridSize", GRID_SIZE)
-    Workspace:SetAttribute("MineBlockSize", BLOCK_SIZE)
-    Workspace:SetAttribute("MineTotalDepth", TOTAL_DEPTH)
-    Workspace:SetAttribute("MineStartY", START_Y)
-    Workspace:SetAttribute("MineFloorY", FLOOR_Y)
+    Workspace:SetAttribute("MineWorldReady", true)
     Workspace.FallenPartsDestroyHeight = FLOOR_Y - 30
 
     print("[WorldGenerator] Mina generada:", GRID_SIZE, "x", GRID_SIZE, "x", TOTAL_DEPTH, "con superficie abierta y límites de seguridad.")
