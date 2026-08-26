@@ -55,6 +55,7 @@ screenGui.Name = "MiningUI"
 screenGui.ResetOnSpawn = false
 screenGui.IgnoreGuiInset = true
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Enabled = false
 screenGui.Parent = playerGui
 
 local function corner(parent, radius)
@@ -194,6 +195,7 @@ end)
 
 -- ======= PANEL DE PROGRESO DEL JUGADOR =======
 local statsPanel = panel(screenGui, "StatsPanel", UDim2.new(0, 18, 0, 94), UDim2.new(0, 300, 0, 252))
+statsPanel.Visible = false
 addSectionHeader(statsPanel, "CENTRO DE CONTROL", "ESTADO DE EXCAVACIÓN // PERSONAL")
 
 local pointsIcon = label(statsPanel, "PointsIcon", "◆", UDim2.new(0, 17, 0, 62), UDim2.new(0, 22, 0, 26), Enum.Font.GothamBlack, 20, C.Gold)
@@ -227,6 +229,7 @@ local bestLabel = label(statsPanel, "Best", "RÉCORD  --", UDim2.new(0, 16, 0, 2
 
 -- ======= PANEL DE PROFUNDIDAD =======
 local depthPanel = panel(screenGui, "DepthPanel", UDim2.new(1, -318, 0, 94), UDim2.new(0, 300, 0, 212))
+depthPanel.Visible = false
 addSectionHeader(depthPanel, "LECTURA DE MINA", "RUTA VERTICAL // ZONA ACTUAL")
 local depthBig = label(depthPanel, "DepthBig", "0m", UDim2.new(0, 16, 0, 61), UDim2.new(0, 130, 0, 42), Enum.Font.GothamBlack, 34, C.Cyan)
 local depthZone = label(depthPanel, "DepthZone", "SUPERFICIE SEGURA", UDim2.new(0, 148, 0, 69), UDim2.new(0, 130, 0, 21), Enum.Font.GothamBold, 10, C.Mint)
@@ -315,6 +318,7 @@ notifContainer.BackgroundTransparency = 1
 notifContainer.AnchorPoint = Vector2.new(0.5, 0)
 notifContainer.Position = UDim2.new(0.5, 0, 0, 92)
 notifContainer.Size = UDim2.new(0, 500, 0, 220)
+notifContainer.Visible = false
 notifContainer.Parent = screenGui
 local notifLayout = Instance.new("UIListLayout")
 notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
@@ -513,6 +517,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
-task.spawn(setupBoard)
+-- El tablero 3D se desactiva para mantener la vista limpia y permitir excavar sin obstrucciones.
 setBuildMode(false)
 print("[MiningUI] HUD tecnológico, perfil, progreso y monitor 3D listos.")

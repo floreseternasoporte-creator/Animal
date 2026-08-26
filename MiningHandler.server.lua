@@ -15,7 +15,7 @@ local Workspace = game:GetService("Workspace")
 local DataStoreService = game:GetService("DataStoreService")
 
 local mineDataStore = DataStoreService:GetDataStore("MiningGame_PlayerData_v2")
-local blocksFolder = Workspace:WaitForChild("MineBlocks", 30)
+local blocksFolder = Workspace:WaitForChild("MineBlocks")
 
 local CONFIG = {
     MaxMineDistance = 18,
@@ -80,9 +80,11 @@ local PICKAXE_LEVELS = {
 local playerData = {}
 
 local function getPickaxeLevel(points)
+    points = tonumber(points) or 0
     local current = PICKAXE_LEVELS[1]
     for _, level in ipairs(PICKAXE_LEVELS) do
-        if points >= level.MinPoints then
+        local minimum = tonumber(level.MinPoints) or 0
+        if points >= minimum then
             current = level
         end
     end
@@ -90,8 +92,10 @@ local function getPickaxeLevel(points)
 end
 
 local function getNextPickaxeLevel(points)
+    points = tonumber(points) or 0
     for _, level in ipairs(PICKAXE_LEVELS) do
-        if points < level.MinPoints then
+        local minimum = tonumber(level.MinPoints) or math.huge
+        if points < minimum then
             return level
         end
     end

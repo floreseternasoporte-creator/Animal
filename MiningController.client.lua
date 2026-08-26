@@ -264,28 +264,8 @@ local function playBreakEffect(block, layerName, points, rarity)
 
     Debris:AddItem(part, 1.6)
 
-    local billboard = Instance.new("BillboardGui")
-    billboard.Name = "BreakScore"
-    billboard.Size = UDim2.new(0, 210, 0, 64)
-    billboard.StudsOffset = Vector3.new(0, 1.5, 0)
-    billboard.AlwaysOnTop = true
-    billboard.Parent = part
-
-    local label = Instance.new("TextLabel")
-    label.BackgroundTransparency = 1
-    label.Size = UDim2.new(1, 0, 1, 0)
-    label.Font = Enum.Font.GothamBlack
-    label.Text = rarityName == "COMÚN"
-        and (("+%d  //  %s"):format(points or 0, tostring(layerName or "BLOQUE")):upper())
-        or (("★ %s  //  +%d  //  %s"):format(rarityName, points or 0, tostring(layerName or "BLOQUE")):upper())
-    label.TextColor3 = rarityColor
-    label.TextStrokeColor3 = Color3.fromRGB(32, 35, 50)
-    label.TextStrokeTransparency = 0.1
-    label.TextScaled = true
-    label.Parent = billboard
-
-    TweenService:Create(part, TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = position + Vector3.new(0, 5, 0) }):Play()
-    TweenService:Create(label, TweenInfo.new(1.1), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+    -- Sin texto flotante: el resultado se comunica únicamente por sonido y HUD compacto.
+    TweenService:Create(part, TweenInfo.new(0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = position + Vector3.new(0, 3, 0) }):Play()
     cameraShake(5)
     playToolSwing()
 end

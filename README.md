@@ -4,7 +4,9 @@ Esta versión convierte la mina en un espacio grande, seguro y realmente excavab
 
 ## Instalación en Roblox Studio
 
-Coloca `WorldGenerator.server.lua` y `MiningHandler.server.lua` dentro de `ServerScriptService`. Coloca `MiningController.client.lua` y `MiningUI.client.lua` dentro de `StarterPlayer > StarterPlayerScripts`. No hace falta crear manualmente carpetas ni RemoteEvents: los scripts los crean y sincronizan al iniciar la partida.
+Antes de probar, elimina o desactiva cualquier script antiguo llamado simplemente `Script` dentro de `ServerScriptService`. El error `ServerScriptService.Script:69: attempt to compare nil < number` también puede aparecer si se ejecuta una versión anterior de `WorldGenerator`: esa versión comparaba `transparency < 1` sin dar un valor por defecto. La versión corregida normaliza `transparency` antes de comparar; no debes dejar scripts duplicados junto al sistema nuevo.
+
+Coloca `WorldGenerator.server.lua` y `MiningHandler.server.lua` dentro de `ServerScriptService`. Coloca `MiningController.client.lua`, `MiningUI.client.lua` y `MiningAudio.client.lua` dentro de `StarterPlayer > StarterPlayerScripts`. Copia los archivos actualizados desde GitHub; Roblox Studio no sincroniza automáticamente los cambios del repositorio. No hace falta crear manualmente carpetas ni RemoteEvents: los scripts los crean y sincronizan al iniciar la partida.
 
 Para que el guardado persistente funcione en una experiencia publicada, habilita **Game Settings > Security > Enable Studio Access to API Services** cuando pruebes desde Studio. En el servidor publicado, el DataStore guarda puntos, profundidad máxima, bloques excavados, tiempo jugado y récord de velocidad.
 
@@ -29,7 +31,7 @@ La excavación cuenta con selección luminosa, herramienta procedural visible, a
 
 La interfaz incluye avatar del usuario, identidad de excavador, progreso vertical, máximo personal, pico y potencia, barra hacia el siguiente pico, bloques excavados, tiempo jugado, récord y modo de construcción.
 
-En la pared opuesta al campamento se crea una pantalla 3D con tres columnas: **más profundo**, **más rápido** y **más puntos**. Cada fila muestra el avatar, nombre, valor principal, bloques excavados, puntos, tiempo jugado y récord de profundidad cuando existe.
+La versión de corrección mantiene la vista limpia: se eliminan el letrero flotante, la pantalla 3D y los textos de puntuación sobre la mina. El `ScreenGui` queda desactivado por defecto, por lo que la excavación no queda tapada por carteles; la tecla `B` sigue cambiando el modo construcción y todos los efectos visuales permanecen en el mundo.
 
 ## Notas de diseño
 

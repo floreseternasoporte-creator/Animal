@@ -30,7 +30,7 @@ local LAYERS = {
     { Name = "Núcleo Estelar",Color = Color3.fromRGB(255, 235, 132),Material = Enum.Material.Neon,     Hits = 20, Points = 650,  Rarity = "ANCIANA",    MinDepth = 108, MaxDepth = 999 },
 }
 
-local GRID_SIZE = 18             -- 18 x 18 bloques por capa
+local GRID_SIZE = 14             -- 14 x 14 bloques por capa: grande, pero estable en Studio
 local BLOCK_SIZE = 6              -- tamaño de cada bloque en studs
 local TOTAL_DEPTH = 110           -- 110 capas; el pozo ya no se siente corto
 local START_Y = 64                -- altura de la primera capa
@@ -69,10 +69,11 @@ local function makePart(parent, name, size, position, color, material, transpare
     part.Position = position
     part.Color = color or Color3.fromRGB(255, 255, 255)
     part.Material = material or Enum.Material.SmoothPlastic
-    part.Transparency = transparency or 0
+    local safeTransparency = tonumber(transparency) or 0
+    part.Transparency = safeTransparency
     part.CanCollide = canCollide ~= false
     part.CanTouch = canCollide ~= false
-    part.CanQuery = transparency < 1
+    part.CanQuery = safeTransparency < 1
     part.TopSurface = Enum.SurfaceType.Smooth
     part.BottomSurface = Enum.SurfaceType.Smooth
     part.Parent = parent
@@ -148,25 +149,6 @@ local function generateSurface()
         light.Parent = lamp
     end
 
-    local signAnchor = makePart(worldFolder, "MineSignAnchor", Vector3.new(1, 1, 1), Vector3.new(0, START_Y + 13, OUTER_WIDTH / 2 + 4), Color3.fromRGB(255, 255, 255), Enum.Material.SmoothPlastic, 1, false)
-    local sign = Instance.new("BillboardGui")
-    sign.Name = "MineTitle"
-    sign.Adornee = signAnchor
-    sign.Size = UDim2.new(0, 520, 0, 120)
-    sign.StudsOffset = Vector3.new(0, 0, 0)
-    sign.AlwaysOnTop = true
-    sign.Parent = worldFolder
-
-    local signLabel = Instance.new("TextLabel")
-    signLabel.BackgroundTransparency = 1
-    signLabel.Size = UDim2.new(1, 0, 1, 0)
-    signLabel.Font = Enum.Font.GothamBlack
-    signLabel.Text = ("MINA PROFUNDA  //  %d CAPAS"):format(TOTAL_DEPTH)
-    signLabel.TextColor3 = Color3.fromRGB(95, 227, 255)
-    signLabel.TextStrokeColor3 = Color3.fromRGB(15, 31, 52)
-    signLabel.TextStrokeTransparency = 0.15
-    signLabel.TextScaled = true
-    signLabel.Parent = sign
 end
 
 local function createBlock(x, y, z, depth)
@@ -204,6 +186,10 @@ local function generateMine()
                 createBlock(xi * BLOCK_SIZE, y, zi * BLOCK_SIZE, depth)
             end
         end
+        -- Ceder un frame evita que la generación masiva congele Studio y permite que la mina aparezca progresivamente.
+        if depth % 2 == 0 then
+            task.wait()
+        end
     end
 
     -- Piso real de seguridad: si se rompe todo, el jugador nunca cae al vacío.
@@ -216,17 +202,6 @@ local function generateMine()
     makePart(boundariesFolder, "BoundarySouth", Vector3.new(OUTER_WIDTH + 40, WALL_HEIGHT, wallThickness), Vector3.new(0, WALL_CENTER_Y, -OUTER_WIDTH / 2 - 18), Color3.fromRGB(255, 255, 255), Enum.Material.ForceField, 1, true)
     makePart(boundariesFolder, "BoundaryEast", Vector3.new(wallThickness, WALL_HEIGHT, OUTER_WIDTH + 40), Vector3.new(OUTER_WIDTH / 2 + 18, WALL_CENTER_Y, 0), Color3.fromRGB(255, 255, 255), Enum.Material.ForceField, 1, true)
     makePart(boundariesFolder, "BoundaryWest", Vector3.new(wallThickness, WALL_HEIGHT, OUTER_WIDTH + 40), Vector3.new(-OUTER_WIDTH / 2 - 18, WALL_CENTER_Y, 0), Color3.fromRGB(255, 255, 255), Enum.Material.ForceField, 1, true)
-
-    -- Pantalla 3D física. El cliente crea el SurfaceGui sobre esta pieza.
-    local display = makePart(Workspace, "LeaderboardDisplay", Vector3.new(46, 23, 1), Vector3.new(0, START_Y + 13, -(OUTER_WIDTH / 2 + 10)), Color3.fromRGB(10, 20, 34), Enum.Material.Metal, 0, true)
-    display:SetAttribute("DisplayType", "MiningLeaderboard")
-    local displayGlow = makePart(worldFolder, "LeaderboardGlow", Vector3.new(43, 20, 0.2), display.Position + Vector3.new(0, 0, 0.58), Color3.fromRGB(33, 112, 150), Enum.Material.Neon, 0.72, false)
-    displayGlow.CanQuery = false
-
-    -- Atril superior para que se identifique como panel de clasificación.
-    local boardHeader = makePart(worldFolder, "LeaderboardHeader", Vector3.new(42, 2.2, 1.5), display.Position + Vector3.new(0, 12.5, 0), Color3.fromRGB(38, 83, 111), Enum.Material.Metal)
-    boardHeader.CanQuery = false
-    makeNeonStrip(worldFolder, "BoardHeaderLine", Vector3.new(37, 0.12, 0.12), boardHeader.Position + Vector3.new(0, -0.75, -0.8), Color3.fromRGB(82, 226, 255))
 
     Workspace:SetAttribute("MineGridSize", GRID_SIZE)
     Workspace:SetAttribute("MineBlockSize", BLOCK_SIZE)
