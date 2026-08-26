@@ -34,3 +34,36 @@ En la pared opuesta al campamento se crea una pantalla 3D con tres columnas: **m
 ## Notas de diseño
 
 La lógica de minería y construcción vive en el servidor. Los LocalScripts sólo envían solicitudes y reproducen feedback visual cuando el servidor confirma la acción. Los bloques construidos se integran a `MineBlocks`, pero no entregan puntos; así se conserva la progresión sin permitir farmear recursos colocando y rompiendo bloques propios.
+
+## Audio y niveles ampliados
+
+Coloca también `MiningAudio.client.lua` en `StarterPlayer > StarterPlayerScripts`. Este script crea los canales de música y ambiente, cambia la atmósfera al descender y reproduce efectos en golpes, roturas, construcción, descubrimientos raros, récords y subidas de pico.
+
+Los IDs de audio están centralizados al comienzo de `MiningAudio.client.lua`:
+
+| Uso | Asset ID | Nota |
+|---|---:|---|
+| Ambiente y tema base de mina | `273398061` | Creator Store: **Cave Ambience**. |
+| Subida de nivel y descubrimiento | `2686079706` | Creator Store: **level up sound effect**. |
+| Rotura de roca | `9125931990` | Creator Store: **Shale Burst Smashing Rock With A Big Stone 1 (SFX)**. |
+| Fragmentos, golpes y construcción | `9125929705` | Creator Store: **Shale Burst Rock Shards Thrown Onto A Big Stone (SFX)**. |
+
+Roblox puede cambiar permisos o disponibilidad de un asset. Si aparece un error de permisos, busca un reemplazo en **Toolbox > Creator Store > Audio**, copia el Asset ID y cambia sólo la tabla `AUDIO`.
+
+La progresión ahora incluye **Tierra, Piedra, Granito, Carbón, Cobre, Hierro, Plata, Oro, Zafiro, Diamante, Esmeralda, Cristal Lunar, Magma, Obsidiana y Núcleo Estelar**. Las rarezas van desde `COMÚN` hasta `ANCIANA`, con más resistencia, puntos, partículas, luces, anillos de energía y audio reforzado en los materiales especiales.
+
+Los picos adicionales son **Pico de Zafiro, Pico de Cristal, Pico de Magma, Pico de Obsidiana y Pico Estelar**, después del Pico de Esmeralda. La barra de progresión del HUD se actualiza automáticamente con cada nuevo umbral.
+
+## Fuentes
+
+[1] [Audio assets — Roblox Creator Hub](https://create.roblox.com/docs/audio/assets)
+
+[2] [Audio objects — Roblox Creator Hub](https://create.roblox.com/docs/audio/objects)
+
+[3] [Cave Ambience — Creator Store](https://create.roblox.com/store/asset/273398061/Cave-Ambience)
+
+[4] [Level up sound effect — Creator Store](https://create.roblox.com/store/asset/2686079706/level-up-sound-effect)
+
+[5] [Shale Burst Smashing Rock With A Big Stone 1 — Creator Store](https://create.roblox.com/store/asset/9125931990/Shale-Burst-Smashing-Rock-With-A-Big-Stone-1-SFX)
+
+[6] [Shale Burst Rock Shards — Creator Store](https://create.roblox.com/store/asset/9125929705/Shale-Burst-Rock-Shards-Thrown-Onto-A-Big-St-SFX)

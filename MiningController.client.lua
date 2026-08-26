@@ -196,10 +196,20 @@ local function playHitEffect(block)
     playToolSwing()
 end
 
-local function playBreakEffect(block, layerName, points)
+local function playBreakEffect(block, layerName, points, rarity)
     if not block then return end
     local position = block.Position
     local color = block.Color
+    local rarityName = tostring(rarity or "COMÚN")
+    local rarityColors = {
+        ["POCO COMÚN"] = Color3.fromRGB(97, 224, 150),
+        ["RARA"] = Color3.fromRGB(102, 174, 255),
+        ["ÉPICA"] = Color3.fromRGB(185, 115, 255),
+        ["MÍTICA"] = Color3.fromRGB(255, 110, 220),
+        ["LEGENDARIA"] = Color3.fromRGB(255, 119, 50),
+        ["ANCIANA"] = Color3.fromRGB(255, 235, 132),
+    }
+    local rarityColor = rarityColors[rarityName] or color
 
     local part = Instance.new("Part")
     part.Name = "MiningBreakFX"
@@ -223,7 +233,35 @@ local function playBreakEffect(block, layerName, points)
     particles.SpreadAngle = Vector2.new(180, 180)
     particles.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.65), NumberSequenceKeypoint.new(1, 0) })
     particles.Parent = attachment
-    particles:Emit(32)
+    particles:Emit(rarityName == "COMÚN" and 32 or 54)
+
+    if rarityName ~= "COMÚN" then
+        local light = Instance.new("PointLight")
+        light.Color = rarityColor
+        light.Brightness = rarityName == "ANCIANA" and 7 or 3.5
+        light.Range = rarityName == "ANCIANA" and 28 or 18
+        light.Parent = part
+
+        local ring = Instance.new("Part")
+        ring.Name = "RareDiscoveryRing"
+        ring.Shape = Enum.PartType.Cylinder
+        ring.Anchored = true
+        ring.CanCollide = false
+        ring.CanTouch = false
+        ring.CanQuery = false
+        ring.Material = Enum.Material.Neon
+        ring.Color = rarityColor
+        ring.Transparency = 0.15
+        ring.Size = Vector3.new(0.18, 1.2, 1.2)
+        ring.CFrame = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
+        ring.Parent = workspace
+        TweenService:Create(ring, TweenInfo.new(0.75, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+            Size = Vector3.new(0.18, rarityName == "ANCIANA" and 14 or 8, rarityName == "ANCIANA" and 14 or 8),
+            Transparency = 1,
+        }):Play()
+        Debris:AddItem(ring, 0.9)
+    end
+
     Debris:AddItem(part, 1.6)
 
     local billboard = Instance.new("BillboardGui")
@@ -237,8 +275,10 @@ local function playBreakEffect(block, layerName, points)
     label.BackgroundTransparency = 1
     label.Size = UDim2.new(1, 0, 1, 0)
     label.Font = Enum.Font.GothamBlack
-    label.Text = ("+%d  //  %s"):format(points or 0, tostring(layerName or "BLOQUE")):upper()
-    label.TextColor3 = Color3.fromRGB(255, 225, 92)
+    label.Text = rarityName == "COMÚN"
+        and (("+%d  //  %s"):format(points or 0, tostring(layerName or "BLOQUE")):upper())
+        or (("★ %s  //  +%d  //  %s"):format(rarityName, points or 0, tostring(layerName or "BLOQUE")):upper())
+    label.TextColor3 = rarityColor
     label.TextStrokeColor3 = Color3.fromRGB(32, 35, 50)
     label.TextStrokeTransparency = 0.1
     label.TextScaled = true
@@ -337,8 +377,8 @@ blockHitEvent.OnClientEvent:Connect(function(block)
     playHitEffect(block)
 end)
 
-blockBrokenEvent.OnClientEvent:Connect(function(block, layerName, points)
-    playBreakEffect(block, layerName, points)
+blockBrokenEvent.OnClientEvent:Connect(function(block, layerName, points, _, _, rarity)
+    playBreakEffect(block, layerName, points, rarity)
 end)
 
 blockPlacedEvent.OnClientEvent:Connect(function(block)

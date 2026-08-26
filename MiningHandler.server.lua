@@ -55,6 +55,7 @@ end
 local mineBlockEvent = getOrCreateRemote("MineBlockRequest")
 local blockHitEvent = getOrCreateRemote("BlockHit")
 local blockBrokenEvent = getOrCreateRemote("BlockBroken")
+local specialDiscoveryEvent = getOrCreateRemote("SpecialDiscovery")
 local statsUpdateEvent = getOrCreateRemote("StatsUpdate")
 local notifyEvent = getOrCreateRemote("Notify")
 local leaderboardUpdateEvent = getOrCreateRemote("LeaderboardUpdate")
@@ -69,7 +70,11 @@ local PICKAXE_LEVELS = {
     { Name = "Pico de Oro",       MinPoints = 400,  Power = 4 },
     { Name = "Pico de Diamante",  MinPoints = 800,  Power = 6 },
     { Name = "Pico de Esmeralda", MinPoints = 1500, Power = 8 },
-    { Name = "Pico Legendario",   MinPoints = 3000, Power = 12 },
+    { Name = "Pico de Zafiro",    MinPoints = 2800, Power = 10 },
+    { Name = "Pico de Cristal",   MinPoints = 4800, Power = 13 },
+    { Name = "Pico de Magma",     MinPoints = 7600, Power = 17 },
+    { Name = "Pico de Obsidiana", MinPoints = 11000, Power = 22 },
+    { Name = "Pico Estelar",      MinPoints = 16000, Power = 30 },
 }
 
 local playerData = {}
@@ -346,6 +351,7 @@ local function onMineBlockRequest(player, block)
     local points = tonumber(block:GetAttribute("Points")) or 0
     local depth = tonumber(block:GetAttribute("Depth")) or 0
     local layerName = tostring(block:GetAttribute("LayerName") or "Bloque")
+    local rarity = tostring(block:GetAttribute("Rarity") or "COMÚN")
     local previousLevel = getPickaxeLevel(data.Points)
 
     data.Points = data.Points + points
@@ -359,7 +365,10 @@ local function onMineBlockRequest(player, block)
     end
 
     local newLevel = getPickaxeLevel(data.Points)
-    blockBrokenEvent:FireClient(player, block, layerName, points, data.Points, data.MaxDepth)
+    blockBrokenEvent:FireClient(player, block, layerName, points, data.Points, data.MaxDepth, rarity)
+    if rarity ~= "COMÚN" or points >= 100 then
+        specialDiscoveryEvent:FireClient(player, layerName, rarity, points, depth)
+    end
     block:SetAttribute("IsMineable", false)
     block:Destroy()
 

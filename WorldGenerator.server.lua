@@ -13,15 +13,21 @@ local Workspace = game:GetService("Workspace")
 
 -- ======= CONFIGURACIÓN DEL MUNDO =======
 local LAYERS = {
-    { Name = "Tierra",     Color = Color3.fromRGB(126, 82, 52),   Material = Enum.Material.Ground,   Hits = 1,  Points = 1,   MinDepth = 1,  MaxDepth = 8 },
-    { Name = "Piedra",     Color = Color3.fromRGB(112, 121, 132), Material = Enum.Material.Slate,    Hits = 2,  Points = 3,   MinDepth = 9,  MaxDepth = 22 },
-    { Name = "Carbón",     Color = Color3.fromRGB(35, 42, 52),    Material = Enum.Material.Basalt,   Hits = 3,  Points = 8,   MinDepth = 23, MaxDepth = 36 },
-    { Name = "Cobre",      Color = Color3.fromRGB(184, 104, 72),  Material = Enum.Material.Metal,    Hits = 3,  Points = 12,  MinDepth = 37, MaxDepth = 48 },
-    { Name = "Hierro",     Color = Color3.fromRGB(168, 148, 132), Material = Enum.Material.Metal,    Hits = 4,  Points = 18,  MinDepth = 49, MaxDepth = 60 },
-    { Name = "Oro",        Color = Color3.fromRGB(239, 192, 54),  Material = Enum.Material.Metal,    Hits = 5,  Points = 34,  MinDepth = 61, MaxDepth = 72 },
-    { Name = "Diamante",   Color = Color3.fromRGB(92, 218, 255),  Material = Enum.Material.Ice,      Hits = 7,  Points = 68,  MinDepth = 73, MaxDepth = 86 },
-    { Name = "Esmeralda",  Color = Color3.fromRGB(47, 211, 138),  Material = Enum.Material.Glass,    Hits = 9,  Points = 115, MinDepth = 87, MaxDepth = 98 },
-    { Name = "Obsidiana",  Color = Color3.fromRGB(30, 23, 48),    Material = Enum.Material.Basalt,   Hits = 12, Points = 230, MinDepth = 99, MaxDepth = 999 },
+    { Name = "Tierra",       Color = Color3.fromRGB(126, 82, 52),   Material = Enum.Material.Ground,   Hits = 1,  Points = 1,    Rarity = "COMÚN",     MinDepth = 1,   MaxDepth = 6 },
+    { Name = "Piedra",       Color = Color3.fromRGB(112, 121, 132), Material = Enum.Material.Slate,    Hits = 2,  Points = 3,    Rarity = "COMÚN",     MinDepth = 7,   MaxDepth = 14 },
+    { Name = "Granito",      Color = Color3.fromRGB(155, 137, 132), Material = Enum.Material.Rock,     Hits = 3,  Points = 6,    Rarity = "COMÚN",     MinDepth = 15,  MaxDepth = 22 },
+    { Name = "Carbón",       Color = Color3.fromRGB(35, 42, 52),    Material = Enum.Material.Basalt,   Hits = 3,  Points = 10,   Rarity = "POCO COMÚN", MinDepth = 23,  MaxDepth = 30 },
+    { Name = "Cobre",        Color = Color3.fromRGB(184, 104, 72),  Material = Enum.Material.Metal,    Hits = 4,  Points = 16,   Rarity = "POCO COMÚN", MinDepth = 31,  MaxDepth = 38 },
+    { Name = "Hierro",       Color = Color3.fromRGB(168, 148, 132), Material = Enum.Material.Metal,    Hits = 4,  Points = 23,   Rarity = "POCO COMÚN", MinDepth = 39,  MaxDepth = 46 },
+    { Name = "Plata",        Color = Color3.fromRGB(210, 224, 235), Material = Enum.Material.Metal,    Hits = 5,  Points = 33,   Rarity = "RARA",       MinDepth = 47,  MaxDepth = 54 },
+    { Name = "Oro",          Color = Color3.fromRGB(239, 192, 54),  Material = Enum.Material.Metal,    Hits = 6,  Points = 48,   Rarity = "RARA",       MinDepth = 55,  MaxDepth = 62 },
+    { Name = "Zafiro",       Color = Color3.fromRGB(45, 115, 255),  Material = Enum.Material.Ice,      Hits = 7,  Points = 68,   Rarity = "ÉPICA",      MinDepth = 63,  MaxDepth = 70 },
+    { Name = "Diamante",     Color = Color3.fromRGB(92, 218, 255),  Material = Enum.Material.Ice,      Hits = 8,  Points = 95,   Rarity = "ÉPICA",      MinDepth = 71,  MaxDepth = 78 },
+    { Name = "Esmeralda",    Color = Color3.fromRGB(47, 211, 138),  Material = Enum.Material.Glass,    Hits = 10, Points = 135,  Rarity = "MÍTICA",     MinDepth = 79,  MaxDepth = 86 },
+    { Name = "Cristal Lunar",Color = Color3.fromRGB(196, 142, 255), Material = Enum.Material.Glass,    Hits = 12, Points = 190,  Rarity = "MÍTICA",     MinDepth = 87,  MaxDepth = 94 },
+    { Name = "Magma",        Color = Color3.fromRGB(255, 86, 38),  Material = Enum.Material.Neon,     Hits = 14, Points = 270,  Rarity = "LEGENDARIA", MinDepth = 95,  MaxDepth = 101 },
+    { Name = "Obsidiana",    Color = Color3.fromRGB(30, 23, 48),    Material = Enum.Material.Basalt,   Hits = 16, Points = 390,  Rarity = "LEGENDARIA", MinDepth = 102, MaxDepth = 107 },
+    { Name = "Núcleo Estelar",Color = Color3.fromRGB(255, 235, 132),Material = Enum.Material.Neon,     Hits = 20, Points = 650,  Rarity = "ANCIANA",    MinDepth = 108, MaxDepth = 999 },
 }
 
 local GRID_SIZE = 18             -- 18 x 18 bloques por capa
@@ -176,6 +182,7 @@ local function createBlock(x, y, z, depth)
     block.BottomSurface = Enum.SurfaceType.Smooth
     block.CastShadow = true
     block:SetAttribute("LayerName", layer.Name)
+    block:SetAttribute("Rarity", layer.Rarity or "COMÚN")
     block:SetAttribute("MaxHits", layer.Hits)
     block:SetAttribute("HitsLeft", layer.Hits)
     block:SetAttribute("Points", layer.Points)
